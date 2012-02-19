@@ -8,6 +8,7 @@
   , "plugins.js"
   , "undo-xpopup.js"
   , "json2.js"
+  , "toolbar.js"
   , "pad_cookie.js"
   , "pad_editor.js"
   , "pad_editbar.js"

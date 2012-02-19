@@ -103,7 +103,7 @@ a img
 {
   float: left;
 }
-#editbar ul#menu_right
+#editbar #menu_right ul
 {
   float: right;
 }

@@ -24,6 +24,8 @@ var padutils = require('/pad_utils').padutils;
 var padeditor = require('/pad_editor').padeditor;
 var padsavedrevs = require('/pad_savedrevs').padsavedrevs;
 
+var toolbar = require('/toolbar');
+
 function indexOf(array, value) {
   for (var i = 0, ii = array.length; i < ii; i++) {
     if (array[i] == value) {
@@ -35,7 +37,6 @@ function indexOf(array, value) {
 
 var padeditbar = (function()
 {
-
   var syncAnimation = (function()
   {
     var SYNCING = -100;
@@ -93,6 +94,124 @@ var padeditbar = (function()
       }
     };
   }());
+
+  var defaultButtons = [ 
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('bold')},
+      title: 'Bold (ctrl-B)',
+      name: 'bold'
+    }),
+
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('italic')},
+      title: 'Italics (ctrl-I)',
+      name: 'italic'
+    }),
+
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('underline')},
+      title: 'Underline (ctrl-U)',
+      name: 'underline'
+    }),
+
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('strikethrough')},
+      title: 'Strikethrough',
+      name: 'strikethrough'
+    }),
+  
+    new toolbar.SeparatorItem(),
+  
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('insertorderedlist')},
+      title: 'Toggle Ordered List',
+      name: 'insertorderedlist'
+    }),
+
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('insertunorderedlist')},
+      title: 'Toggle Bullet List',
+      name: 'insertunorderedlist'
+    }),
+
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('indent')},
+      title: 'Indent',
+      name: 'indent'
+    }),
+
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('outdent')},
+      title: 'Unindent',
+      name: 'outdent'
+    }),
+  
+    new toolbar.SeparatorItem(),
+  
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('undo')},
+      title: 'Undo (ctrl-Z)',
+      name: 'undo'
+    }),
+
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('redo')},
+      title: 'Redo (ctrl-Y)',
+      name: 'redo'
+    }),
+  
+    new toolbar.SeparatorItem(),
+  
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('clearauthorship')},
+      title: 'Clear Authorship Colors',
+      name: 'clearauthorship'
+    })
+  ];
+
+  var defaultRightButtons = [
+    new toolbar.ButtonItem({
+      click: function(){ window.pad && pad.editbarClick('settings')},
+      title: 'Settings of this pad',
+      name: 'settings'
+    }),
+      
+    new toolbar.ButtonItem({
+      click: function(){window.pad && pad.editbarClick('import_export');},
+      title: 'Import/Export from/to different document formats',
+      name: 'import_export'
+    }),
+  
+    new toolbar.ButtonItem({
+      click: function(){window.pad && pad.editbarClick('embed');},
+      title: 'Share and Embed this pad',
+      name: 'embed'
+    }),
+
+    new toolbar.SeparatorItem(),
+
+    new toolbar.ButtonItem({
+      click: function(){ document.location = document.location.pathname+ '/timeslider'},
+      title: 'Show the history of this pad',
+      name: 'history'
+    }),
+
+    new toolbar.CustomItem(
+      $('<li id="usericon" />')
+      .append('<a title="Show connected users"><div class="buttonicon buttonicon-showusers" id="usericonback"></div><span id="online_count">1</span></a></li>')
+      .click(function(){
+        window.pad && pad.editbarClick('showusers')
+      }
+    ))
+    ];
+
+  var mainToolbar = $("#menu_left").epToolbar();
+  var rightToolbar = $("#menu_right").epToolbar();
+  
+  // That would be a good place for HOOK_MAIN_TOOLBAR (toolbar/buttons)
+  
+  mainToolbar.setButtons(defaultButtons);
+  rightToolbar.setButtons(defaultRightButtons);
 
   var self = {
     init: function()
