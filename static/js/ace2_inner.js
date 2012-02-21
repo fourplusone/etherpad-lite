@@ -998,39 +998,19 @@ function Ace2Inner(){
   {
     return (new Date()).getTime();
   }
-
+  
   function newTimeLimit(ms)
   {
-    //console.debug("new time limit");
     var startTime = now();
-    var lastElapsed = 0;
     var exceededAlready = false;
-    var printedTrace = false;
     var isTimeUp = function()
-      {
-        if (exceededAlready)
-        {
-          if ((!printedTrace))
-          { // && now() - startTime - ms > 300) {
-            //console.trace();
-            printedTrace = true;
-          }
-          return true;
-        }
-        var elapsed = now() - startTime;
-        if (elapsed > ms)
-        {
-          exceededAlready = true;
-          //console.debug("time limit hit, before was %d/%d", lastElapsed, ms);
-          //console.trace();
-          return true;
-        }
-        else
-        {
-          lastElapsed = elapsed;
-          return false;
-        }
-      };
+    {
+      if (exceededAlready){ return true; }
+      
+      var elapsed = now() - startTime;
+      exceededAlready = (elapsed > ms);
+      return exceededAlready;
+    };
         
     isTimeUp.elapsed = function()
     {
