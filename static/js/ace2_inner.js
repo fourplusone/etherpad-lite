@@ -847,152 +847,156 @@ function Ace2Inner(){
       performDocumentReplaceRange(start, end, text);
     });
   }
+  
+  
+  // Makes all public functions of ACE2 available through an editorInfo object
+  function exposeApi(editorInfo){
+    editorInfo.ace_focus = focus;
+    editorInfo.ace_importText = importText;
+    editorInfo.ace_importAText = importAText;
+    editorInfo.ace_exportText = exportText;
+    editorInfo.ace_editorChangedSize = editorChangedSize;
+    editorInfo.ace_setOnKeyPress = setOnKeyPress;
+    editorInfo.ace_setOnKeyDown = setOnKeyDown;
+    editorInfo.ace_setNotifyDirty = setNotifyDirty;
+    editorInfo.ace_dispose = dispose;
+    editorInfo.ace_getFormattedCode = getFormattedCode;
+    editorInfo.ace_setEditable = setEditable;
+    editorInfo.ace_execCommand = execCommand;
+    editorInfo.ace_replaceRange = replaceRange;
 
-  editorInfo.ace_focus = focus;
-  editorInfo.ace_importText = importText;
-  editorInfo.ace_importAText = importAText;
-  editorInfo.ace_exportText = exportText;
-  editorInfo.ace_editorChangedSize = editorChangedSize;
-  editorInfo.ace_setOnKeyPress = setOnKeyPress;
-  editorInfo.ace_setOnKeyDown = setOnKeyDown;
-  editorInfo.ace_setNotifyDirty = setNotifyDirty;
-  editorInfo.ace_dispose = dispose;
-  editorInfo.ace_getFormattedCode = getFormattedCode;
-  editorInfo.ace_setEditable = setEditable;
-  editorInfo.ace_execCommand = execCommand;
-  editorInfo.ace_replaceRange = replaceRange;
-
-  editorInfo.ace_callWithAce = function(fn, callStack, normalize)
-  {
-    var wrapper = function()
+    editorInfo.ace_callWithAce = function(fn, callStack, normalize)
     {
-      return fn(editorInfo);
-    };
-        
-        
-        
-    if (normalize !== undefined)
-    {
-      var wrapper1 = wrapper;
-      wrapper = function()
+      var wrapper = function()
       {
-        editorInfo.ace_fastIncorp(9);
-        wrapper1();
+        return fn(editorInfo);
       };
-    }
 
-    if (callStack !== undefined)
-    {
-      return editorInfo.ace_inCallStack(callStack, wrapper);
-    }
-    else
-    {
-      return wrapper();
-    }
-  };
+      if (normalize !== undefined)
+      {
+        var wrapper1 = wrapper;
+        wrapper = function()
+        {
+          editorInfo.ace_fastIncorp(9);
+          wrapper1();
+        };
+      }
 
-  // This methed exposes a setter for some ace properties
-  // @param key the name of the parameter
-  // @param value the value to set to
-  editorInfo.ace_setProperty = function(key, value)
-  {
-    
-    // Convinience function returning a setter for a class on an element    
-    var setClassPresenceNamed = function(element, cls){
-      return function(value){
-         setClassPresence(element, cls, !! value)
+      if (callStack !== undefined)
+      {
+        return editorInfo.ace_inCallStack(callStack, wrapper);
+      }
+      else
+      {
+        return wrapper();
       }
     };
-    
-    // These properties are exposed
-    var setters = {
-      wraps: setWraps,
-      showsauthorcolors: setClassPresenceNamed(root, "authorColors"),
-      showsuserselections: setClassPresenceNamed(root, "userSelections"),
-      showslinenumbers : function(value){
-        hasLineNumbers = !! value;
-        // disable line numbers on mobile devices
-        if (browser.mobile) hasLineNumbers = false;
-        setClassPresence(sideDiv, "sidedivhidden", !hasLineNumbers);
-        fixView();
-      },
-      grayedout: setClassPresenceNamed(outerWin.document.body, "grayedout"),
-      dmesg: function(){ dmesg = window.dmesg = value; },
-      userauthor: function(value){ thisAuthor = String(value); },
-      styled: setStyled,
-      textface: setTextFace,
-      textsize: setTextSize,
-      rtlistrue: setClassPresenceNamed(root, "rtl")
+
+    // This methed exposes a setter for some ace properties
+    // @param key the name of the parameter
+    // @param value the value to set to
+    editorInfo.ace_setProperty = function(key, value)
+    {
+
+      // Convinience function returning a setter for a class on an element    
+      var setClassPresenceNamed = function(element, cls){
+        return function(value){
+           setClassPresence(element, cls, !! value)
+        }
+      };
+
+      // These properties are exposed
+      var setters = {
+        wraps: setWraps,
+        showsauthorcolors: setClassPresenceNamed(root, "authorColors"),
+        showsuserselections: setClassPresenceNamed(root, "userSelections"),
+        showslinenumbers : function(value){
+          hasLineNumbers = !! value;
+          // disable line numbers on mobile devices
+          if (browser.mobile) hasLineNumbers = false;
+          setClassPresence(sideDiv, "sidedivhidden", !hasLineNumbers);
+          fixView();
+        },
+        grayedout: setClassPresenceNamed(outerWin.document.body, "grayedout"),
+        dmesg: function(){ dmesg = window.dmesg = value; },
+        userauthor: function(value){ thisAuthor = String(value); },
+        styled: setStyled,
+        textface: setTextFace,
+        textsize: setTextSize,
+        rtlistrue: setClassPresenceNamed(root, "rtl")
+      };
+
+      var setter = setters[key.toLowerCase()];
+
+      // check if setter is present 
+      if(setter !== undefined){
+        setter(value)
+      }
+    };
+
+    editorInfo.ace_setBaseText = function(txt)
+    {
+      changesetTracker.setBaseText(txt);
+    };
+    editorInfo.ace_setBaseAttributedText = function(atxt, apoolJsonObj)
+    {
+      setUpTrackingCSS();
+      changesetTracker.setBaseAttributedText(atxt, apoolJsonObj);
+    };
+    editorInfo.ace_applyChangesToBase = function(c, optAuthor, apoolJsonObj)
+    {
+      changesetTracker.applyChangesToBase(c, optAuthor, apoolJsonObj);
+    };
+    editorInfo.ace_prepareUserChangeset = function()
+    {
+      return changesetTracker.prepareUserChangeset();
+    };
+    editorInfo.ace_applyPreparedChangesetToBase = function()
+    {
+      changesetTracker.applyPreparedChangesetToBase();
+    };
+    editorInfo.ace_setUserChangeNotificationCallback = function(f)
+    {
+      changesetTracker.setUserChangeNotificationCallback(f);
+    };
+    editorInfo.ace_setAuthorInfo = function(author, info)
+    {
+      setAuthorInfo(author, info);
+    };
+    editorInfo.ace_setAuthorSelectionRange = function(author, start, end)
+    {
+      changesetTracker.setAuthorSelectionRange(author, start, end);
+    };
+
+    editorInfo.ace_getUnhandledErrors = function()
+    {
+      return caughtErrors.slice();
+    };
+
+    editorInfo.ace_getDebugProperty = function(prop)
+    {
+      if (prop == "debugger")
+      {
+        // obfuscate "eval" so as not to scare yuicompressor
+        window['ev' + 'al']("debugger");
+      }
+      else if (prop == "rep")
+      {
+        return rep;
+      }
+      else if (prop == "window")
+      {
+        return window;
+      }
+      else if (prop == "document")
+      {
+        return document;
+      }
+      return undefined;
     };
     
-    var setter = setters[key.toLowerCase();];
-    
-    // check if setter is present 
-    if(setter !== undefined){
-      setter(value)
-    }
-  };
-
-  editorInfo.ace_setBaseText = function(txt)
-  {
-    changesetTracker.setBaseText(txt);
-  };
-  editorInfo.ace_setBaseAttributedText = function(atxt, apoolJsonObj)
-  {
-    setUpTrackingCSS();
-    changesetTracker.setBaseAttributedText(atxt, apoolJsonObj);
-  };
-  editorInfo.ace_applyChangesToBase = function(c, optAuthor, apoolJsonObj)
-  {
-    changesetTracker.applyChangesToBase(c, optAuthor, apoolJsonObj);
-  };
-  editorInfo.ace_prepareUserChangeset = function()
-  {
-    return changesetTracker.prepareUserChangeset();
-  };
-  editorInfo.ace_applyPreparedChangesetToBase = function()
-  {
-    changesetTracker.applyPreparedChangesetToBase();
-  };
-  editorInfo.ace_setUserChangeNotificationCallback = function(f)
-  {
-    changesetTracker.setUserChangeNotificationCallback(f);
-  };
-  editorInfo.ace_setAuthorInfo = function(author, info)
-  {
-    setAuthorInfo(author, info);
-  };
-  editorInfo.ace_setAuthorSelectionRange = function(author, start, end)
-  {
-    changesetTracker.setAuthorSelectionRange(author, start, end);
-  };
-
-  editorInfo.ace_getUnhandledErrors = function()
-  {
-    return caughtErrors.slice();
-  };
-
-  editorInfo.ace_getDebugProperty = function(prop)
-  {
-    if (prop == "debugger")
-    {
-      // obfuscate "eval" so as not to scare yuicompressor
-      window['ev' + 'al']("debugger");
-    }
-    else if (prop == "rep")
-    {
-      return rep;
-    }
-    else if (prop == "window")
-    {
-      return window;
-    }
-    else if (prop == "document")
-    {
-      return document;
-    }
-    return undefined;
-  };
+  }
+  exposeApi(editorInfo);
 
   function now()
   {
