@@ -897,7 +897,6 @@ function Ace2Inner(){
     // @param value the value to set to
     editorInfo.ace_setProperty = function(key, value)
     {
-
       // Convinience function returning a setter for a class on an element    
       var setClassPresenceNamed = function(element, cls){
         return function(value){
@@ -967,7 +966,7 @@ function Ace2Inner(){
     {
       changesetTracker.setAuthorSelectionRange(author, start, end);
     };
-
+    
     editorInfo.ace_getUnhandledErrors = function()
     {
       return caughtErrors.slice();
@@ -5637,7 +5636,6 @@ function Ace2Inner(){
       }
     }
   }
-  
 }
-
-exports.editor = new Ace2Inner();
+OUTER(this);
+exports.OUTER = OUTER; // This is probably unimportant.
