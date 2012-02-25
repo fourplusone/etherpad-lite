@@ -141,7 +141,36 @@ function Ace2Editor()
     info = null; // prevent IE 6 closure memory leaks
   });
   
-
+  // This function injects a script into a given document and calls callback once loaded
+  // @param src The source of the script
+  // @param doc the document to be injected in
+  // @param callback function which will be called once script is loaded
+  
+  editor.loadJS = function(src, doc, callback){
+    if (doc === undefined){ doc = window.document; }
+    var head = doc.head || doc.getElementsByTagName('head')[0] || doc.documentElement;
+    var script = doc.createElement('script');
+    
+    if (script.async !== undefined) {
+      script.async = "true";
+    } else {
+      script.defer = "true";
+    }
+    
+    script.type = "application/javascript";
+    script.src = src;
+        
+    // This part is from https://github.com/headjs/headjs/blob/master/src/load.js, MIT-License
+    script.onreadystatechange = script.onload = function() {
+      var state = script.readyState;
+      if (!callback.done && (!state || /loaded|complete/.test(state))) {
+          callback.done = true;
+          callback();
+      }
+    };
+    // use body if available. more safe in IE
+    (doc.body || head).appendChild(script);
+  }
   
   editor.init = function(containerId, initialCode, doneFunc)
   {
@@ -184,26 +213,28 @@ function Ace2Editor()
       iframeHTML.push('<link rel="stylesheet" type="text/css" href="../static/css/pad.css">');
       iframeHTML.push('<link rel="stylesheet" type="text/css" href="../static/custom/pad.css">');
       
-      // Include Require Kernel and ace2_innner.js in iFrame;
-      iframeHTML.push('<script type="text/javascript" src="../static/js/require-kernel.js"></script>');
       iframeHTML.push('<script type="text/javascript">');
-
-      // Configure reqire
-      iframeHTML.push('require.setRootURI("../minified/");');
-      iframeHTML.push('require.setGlobalKeyPath("require");');
       
+      // Include Require Kernel and ace2_innner.js in iFrame;
+      iframeHTML.push('var editor = parent.editorInfo.editor;');
+      iframeHTML.push('editor.loadJS("../static/js/require-kernel.js", document, function(){');
+      // Configure reqire 
+      iframeHTML.push('require.setRootURI("../minified/");');
+      iframeHTML.push('require.setGlobalKeyPath("require"); ');
+      iframeHTML.push('console.log("init...");');
       // Inject my plugins into my child.
       iframeHTML.push('require.define("/plugins", null);');
       iframeHTML.push('require.define("/plugins.js", function (require, exports, module) {');
-      iframeHTML.push('module.exports = parent.parent.require("/plugins");');
+      iframeHTML.push('module.exports = parent.parent.require("/plugins"); ');
       iframeHTML.push('});');
-      iframeHTML.push('<\/script>');
+      // Require ACE2 
+      iframeHTML.push('editor.loadJS("../minified/ace2_inner.js", document, function(){ ');
+      iframeHTML.push('require("/ace2_inner"); ');
+      iframeHTML.push('})');
+      iframeHTML.push('});');
       
-      // Require ace2
-      iframeHTML.push('<script type="text/javascript" src="../minified/ace2_inner.js"></script>');
-      iframeHTML.push('<script type="text/javascript">');
-      iframeHTML.push('require("/ace2_inner");');
-      iframeHTML.push('<\/script>');
+      iframeHTML.push('</script>');
+      
       
       iframeHTML.push('<style type="text/css" title="dynamicsyntax"></style>');
       iframeHTML.push('</head><body id="innerdocbody" class="syntax" spellcheck="false">&nbsp;</body></html>');
