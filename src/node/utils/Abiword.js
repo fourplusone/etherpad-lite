@@ -18,7 +18,6 @@
  * limitations under the License.
  */
  
-var util  = require('util');
 var spawn = require('child_process').spawn;
 var async = require("async");
 var settings = require("./Settings");
@@ -63,7 +62,7 @@ if(os.type().indexOf("Windows") > -1)
 
       callback();
     });
-  }
+  };
   
   exports.convertFile = function(srcFile, destFile, type, callback)
   {
@@ -100,7 +99,7 @@ else
     {
       //add data to buffer
       stdoutBuffer+=data.toString();
-      
+
       //we're searching for the prompt, cause this means everything we need is in the buffer
       if(stdoutBuffer.search("AbiWord:>") != -1)
       {
@@ -121,27 +120,29 @@ else
         firstPrompt = false;
       }
     });
-  }
+  };
   spawnAbiword();
 
   doConvertTask = function(task, callback)
   {
     abiword.stdin.write("convert " + task.srcFile + " " + task.destFile + " " + task.type + "\n");
-    
     //create a callback that calls the task callback and the caller callback
     stdoutCallback = function (err)
     {
       callback();
       console.log("queue continue");
-      task.callback(err);
+      try{
+        task.callback(err);
+      }catch(e){
+        console.error("Abiword File failed to convert", e);
+      }
     };
-  }
+  };
   
   //Queue with the converts we have to do
   var queue = async.queue(doConvertTask, 1);
-  
   exports.convertFile = function(srcFile, destFile, type, callback)
-  {	
+  {
     queue.push({"srcFile": srcFile, "destFile": destFile, "type": type, "callback": callback});
   };
 }

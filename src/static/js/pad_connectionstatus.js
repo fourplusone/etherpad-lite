@@ -42,15 +42,17 @@ var padconnectionstatus = (function()
       status = {
         what: 'connected'
       };
-      padmodals.hideModal(500);
+      padmodals.showModal('connected');
+      padmodals.hideOverlay();
     },
     reconnecting: function()
     {
       status = {
         what: 'reconnecting'
       };
-      $("#connectionbox").get(0).className = 'modaldialog cboxreconnecting';
-      padmodals.showModal("#connectionbox", 500);
+      
+      padmodals.showModal('reconnecting');
+      padmodals.showOverlay();
     },
     disconnected: function(msg)
     {
@@ -61,20 +63,15 @@ var padconnectionstatus = (function()
         what: 'disconnected',
         why: msg
       };
-      var k = String(msg).toLowerCase(); // known reason why
-      if (!(k == 'userdup' || k == 'deleted' || k == 'looping' || k == 'slowcommit' || k == 'initsocketfail' || k == 'unauth'))
-      {
-        k = 'unknown';
-      }
       
-      var cls = 'modaldialog cboxdisconnected cboxdisconnected_' + k;
-      $("#connectionbox").get(0).className = cls;
-      padmodals.showModal("#connectionbox", 500);
-
-      $('button#forcereconnect').click(function()
+      var k = String(msg); // known reason why
+      if (!(k == 'userdup' || k == 'deleted' || k == 'looping' || k == 'slowcommit' || k == 'initsocketfail' || k == 'unauth' || k == 'badChangeset' || k == 'corruptPad'))
       {
-        window.location.reload();
-      });
+        k = 'disconnected';
+      }
+
+      padmodals.showModal(k);
+      padmodals.showOverlay();
     },
     isFullyConnected: function()
     {

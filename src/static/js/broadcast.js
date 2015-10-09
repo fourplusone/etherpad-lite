@@ -27,6 +27,7 @@ var Changeset = require('./Changeset');
 var linestylefilter = require('./linestylefilter').linestylefilter;
 var colorutils = require('./colorutils').colorutils;
 var _ = require('./underscore');
+var hooks = require('./pluginfw/hooks');
 
 // These parameters were global, now they are injected. A reference to the
 // Timeslider controller would probably be more appropriate.
@@ -65,33 +66,20 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
     }
   }
 
-  // for IE
-  if ($.browser.msie)
-  {
-    try
-    {
-      document.execCommand("BackgroundImageCache", false, true);
-    }
-    catch (e)
-    {}
-  }
-
-
-  var socketId;
   //var socket;
   var channelState = "DISCONNECTED";
 
   var appLevelDisconnectReason = null;
 
   var padContents = {
-    currentRevision: clientVars.revNum,
-    currentTime: clientVars.currentTime,
-    currentLines: Changeset.splitTextLines(clientVars.initialStyledContents.atext.text),
+    currentRevision: clientVars.collab_client_vars.rev,
+    currentTime: clientVars.collab_client_vars.time,
+    currentLines: Changeset.splitTextLines(clientVars.collab_client_vars.initialAttributedText.text),
     currentDivs: null,
     // to be filled in once the dom loads
-    apool: (new AttribPool()).fromJsonable(clientVars.initialStyledContents.apool),
+    apool: (new AttribPool()).fromJsonable(clientVars.collab_client_vars.apool),
     alines: Changeset.splitAttributionLines(
-    clientVars.initialStyledContents.atext.attribs, clientVars.initialStyledContents.atext.text),
+    clientVars.collab_client_vars.initialAttributedText.attribs, clientVars.collab_client_vars.initialAttributedText.text),
 
     // generates a jquery element containing HTML for a line
     lineToElement: function(line, aline)
@@ -244,14 +232,14 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
     if (broadcasting) applyChangeset(changesetForward, revision + 1, false, timeDelta);
   }
 
-/*
+   /*
    At this point, we must be certain that the changeset really does map from
    the current revision to the specified revision.  Any mistakes here will
    cause the whole slider to get out of sync.
    */
 
   function applyChangeset(changeset, revision, preventSliderMovement, timeDelta)
-  {
+  { 
     // disable the next 'gotorevision' call handled by a timeslider update
     if (!preventSliderMovement)
     {
@@ -272,6 +260,7 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
     Changeset.mutateTextLines(changeset, padContents);
     padContents.currentRevision = revision;
     padContents.currentTime += timeDelta * 1000;
+
     debugLog('Time Delta: ', timeDelta)
     updateTimer();
     
@@ -293,8 +282,6 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
         return str;
         }
         
-        
-        
     var date = new Date(padContents.currentTime);
     var dateFormat = function()
       {
@@ -304,7 +291,14 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
         var hours = zpad(date.getHours(), 2);
         var minutes = zpad(date.getMinutes(), 2);
         var seconds = zpad(date.getSeconds(), 2);
-        return ([month, '/', day, '/', year, ' ', hours, ':', minutes, ':', seconds].join(""));
+        return (html10n.get("timeslider.dateformat", {
+          "day": day,
+          "month": month,
+          "year": year,
+          "hours": hours,
+          "minutes": minutes, 
+          "seconds": seconds
+        }));
         }
         
         
@@ -312,8 +306,24 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
         
         
     $('#timer').html(dateFormat());
-
-    var revisionDate = ["Saved", ["Jan", "Feb", "March", "April", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec"][date.getMonth()], date.getDate() + ",", date.getFullYear()].join(" ")
+    var revisionDate = html10n.get("timeslider.saved", {
+      "day": date.getDate(),
+      "month": [
+                html10n.get("timeslider.month.january"),
+                html10n.get("timeslider.month.february"),
+                html10n.get("timeslider.month.march"),
+                html10n.get("timeslider.month.april"),
+                html10n.get("timeslider.month.may"),
+                html10n.get("timeslider.month.june"),
+                html10n.get("timeslider.month.july"),
+                html10n.get("timeslider.month.august"),
+                html10n.get("timeslider.month.september"),
+                html10n.get("timeslider.month.october"),
+                html10n.get("timeslider.month.november"),
+                html10n.get("timeslider.month.december")
+               ][date.getMonth()],
+      "year": date.getFullYear()
+    });
     $('#revision_date').html(revisionDate)
 
   }
@@ -363,28 +373,34 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
       }
       if (changeset) applyChangeset(changeset, path.rev, true, timeDelta);
 
-
-      if (BroadcastSlider.getSliderLength() > 10000)
-      {
-        var start = (Math.floor((newRevision) / 10000) * 10000); // revision 0 to 10
-        changesetLoader.queueUp(start, 100);
-      }
-
-      if (BroadcastSlider.getSliderLength() > 1000)
-      {
-        var start = (Math.floor((newRevision) / 1000) * 1000); // (start from -1, go to 19) + 1
-        changesetLoader.queueUp(start, 10);
-      }
-
-      start = (Math.floor((newRevision) / 100) * 100);
-
-      changesetLoader.queueUp(start, 1, update);
+      // Loading changeset history for new revision
+      loadChangesetsForRevision(newRevision, update);
+      // Loading changeset history for old revision (to make diff between old and new revision)
+      loadChangesetsForRevision(padContents.currentRevision - 1);
     }
     
     var authors = _.map(padContents.getActiveAuthors(), function(name){
       return authorData[name];
     });
     BroadcastSlider.setAuthors(authors);
+  }
+  
+  function loadChangesetsForRevision(revision, callback) {
+    if (BroadcastSlider.getSliderLength() > 10000)
+    {
+      var start = (Math.floor((revision) / 10000) * 10000); // revision 0 to 10
+      changesetLoader.queueUp(start, 100);
+    }
+
+    if (BroadcastSlider.getSliderLength() > 1000)
+    {
+      var start = (Math.floor((revision) / 1000) * 1000); // (start from -1, go to 19) + 1
+      changesetLoader.queueUp(start, 10);
+    }
+
+    start = (Math.floor((revision) / 100) * 100);
+
+    changesetLoader.queueUp(start, 1, callback);
   }
 
   changesetLoader = {
@@ -432,19 +448,6 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
       var start = request.rev;
       var requestID = Math.floor(Math.random() * 100000);
 
-/*var msg = { "component" : "timeslider",
-                  "type":"CHANGESET_REQ", 
-                  "padId": padId,
-                  "token": token,
-                  "protocolVersion": 2, 
-                  "data"
-                  {
-                    "start": start,
-                    "granularity": granularity
-                  }};
-    
-      socket.send(msg);*/
-
       sendSocketMsg("CHANGESET_REQ", {
         "start": start,
         "granularity": granularity,
@@ -452,19 +455,6 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
       });
 
       self.reqCallbacks[requestID] = callback;
-
-/*debugLog("loadinging revision", start, "through ajax");
-      $.getJSON("/ep/pad/changes/" + clientVars.padIdForUrl + "?s=" + start + "&g=" + granularity, function (data, textStatus)
-      {
-        if (textStatus !== "success")
-        {
-          console.log(textStatus);
-          BroadcastSlider.showReconnectUI();
-        }
-        self.handleResponse(data, start, granularity, callback);
-
-        setTimeout(self.loadFromQueue, 10); // load the next ajax function
-      });*/
     },
     handleSocketResponse: function(message)
     {
@@ -487,135 +477,64 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
         var astart = start + i * granularity - 1; // rev -1 is a blank single line
         var aend = start + (i + 1) * granularity - 1; // totalRevs is the most recent revision
         if (aend > data.actualEndNum - 1) aend = data.actualEndNum - 1;
-        debugLog("adding changeset:", astart, aend);
+        //debugLog("adding changeset:", astart, aend);
         var forwardcs = Changeset.moveOpsToNewPool(data.forwardsChangesets[i], pool, padContents.apool);
         var backwardcs = Changeset.moveOpsToNewPool(data.backwardsChangesets[i], pool, padContents.apool);
         revisionInfo.addChangeset(astart, aend, forwardcs, backwardcs, data.timeDeltas[i]);
       }
       if (callback) callback(start - 1, start + data.forwardsChangesets.length * granularity - 1);
+    },
+    handleMessageFromServer: function (obj)
+    {
+      debugLog("handleMessage:", arguments);
+
+      if (obj.type == "COLLABROOM")
+      {
+        obj = obj.data;
+
+        if (obj.type == "NEW_CHANGES")
+        {
+          debugLog(obj);
+          var changeset = Changeset.moveOpsToNewPool(
+            obj.changeset, (new AttribPool()).fromJsonable(obj.apool), padContents.apool);
+
+          var changesetBack = Changeset.inverse(
+            obj.changeset, padContents.currentLines, padContents.alines, padContents.apool);
+
+          var changesetBack = Changeset.moveOpsToNewPool(
+            changesetBack, (new AttribPool()).fromJsonable(obj.apool), padContents.apool);
+
+          loadedNewChangeset(changeset, changesetBack, obj.newRev - 1, obj.timeDelta);
+        }
+        else if (obj.type == "NEW_AUTHORDATA")
+        {
+          var authorMap = {};
+          authorMap[obj.author] = obj.data;
+          receiveAuthorData(authorMap);
+
+          var authors = _.map(padContents.getActiveAuthors(), function(name) {
+            return authorData[name];
+          });
+
+          BroadcastSlider.setAuthors(authors);
+        }
+        else if (obj.type == "NEW_SAVEDREV")
+        {
+          var savedRev = obj.savedRev;
+          BroadcastSlider.addSavedRevision(savedRev.revNum, savedRev);
+        }
+        hooks.callAll('handleClientTimesliderMessage_' + obj.type, {payload: obj});
+      }
+      else if(obj.type == "CHANGESET_REQ")
+      {
+        changesetLoader.handleSocketResponse(obj);
+      }
+      else
+      {
+        debugLog("Unknown message type: " + obj.type);
+      }
     }
   };
-
-  function handleMessageFromServer()
-  {
-    debugLog("handleMessage:", arguments);
-    var obj = arguments[0]['data'];
-    var expectedType = "COLLABROOM";
-
-    obj = JSON.parse(obj);
-    if (obj['type'] == expectedType)
-    {
-      obj = obj['data'];
-
-      if (obj['type'] == "NEW_CHANGES")
-      {
-        debugLog(obj);
-        var changeset = Changeset.moveOpsToNewPool(
-        obj.changeset, (new AttribPool()).fromJsonable(obj.apool), padContents.apool);
-
-        var changesetBack = Changeset.moveOpsToNewPool(
-        obj.changesetBack, (new AttribPool()).fromJsonable(obj.apool), padContents.apool);
-
-        loadedNewChangeset(changeset, changesetBack, obj.newRev - 1, obj.timeDelta);
-      }
-      else if (obj['type'] == "NEW_AUTHORDATA")
-      {
-        var authorMap = {};
-        authorMap[obj.author] = obj.data;
-        receiveAuthorData(authorMap);
-        
-        var authors = _.map(padContents.getActiveAuthors(), function(name) {
-          return authorData[name];
-        });
-        
-        BroadcastSlider.setAuthors(authors);
-      }
-      else if (obj['type'] == "NEW_SAVEDREV")
-      {
-        var savedRev = obj.savedRev;
-        BroadcastSlider.addSavedRevision(savedRev.revNum, savedRev);
-      }
-    }
-    else
-    {
-      debugLog("incorrect message type: " + obj['type'] + ", expected " + expectedType);
-    }
-  }
-
-  function handleSocketClosed(params)
-  {
-    debugLog("socket closed!", params);
-    socket = null;
-
-    BroadcastSlider.showReconnectUI();
-    // var reason = appLevelDisconnectReason || params.reason;
-    // var shouldReconnect = params.reconnect;
-    // if (shouldReconnect) {
-    //   // determine if this is a tight reconnect loop due to weird connectivity problems
-    //   // reconnectTimes.push(+new Date());
-    //   var TOO_MANY_RECONNECTS = 8;
-    //   var TOO_SHORT_A_TIME_MS = 10000;
-    //   if (reconnectTimes.length >= TOO_MANY_RECONNECTS &&
-    //       ((+new Date()) - reconnectTimes[reconnectTimes.length-TOO_MANY_RECONNECTS]) <
-    //       TOO_SHORT_A_TIME_MS) {
-    //      setChannelState("DISCONNECTED", "looping");
-    //   }
-    //   else {
-    //      setChannelState("RECONNECTING", reason);
-    //      setUpSocket();
-    //   }
-    // }
-    // else {
-    //   BroadcastSlider.showReconnectUI();
-    //   setChannelState("DISCONNECTED", reason);
-    // }
-  }
-
-  function sendMessage(msg)
-  {
-    socket.postMessage(JSON.stringify(
-    {
-      type: "COLLABROOM",
-      data: msg
-    }));
-  }
-
-
-  function setChannelState(newChannelState, moreInfo)
-  {
-    if (newChannelState != channelState)
-    {
-      channelState = newChannelState;
-      // callbacks.onChannelStateChange(channelState, moreInfo);
-    }
-  }
-
-  function abandonConnection(reason)
-  {
-    if (socket)
-    {
-      socket.onclosed = function()
-      {};
-      socket.onhiccup = function()
-      {};
-      socket.disconnect();
-    }
-    socket = null;
-    setChannelState("DISCONNECTED", reason);
-  }
-
-    /// Since its not used, import 'forEach' has been dropped
-/*window['onloadFuncts'] = [];
-  window.onload = function ()
-  {
-    window['isloaded'] = true;
-    
-
-    forEach(window['onloadFuncts'],function (funct)
-    {
-      funct();
-    });
-  };*/
 
   // to start upon window load, just push a function onto this array
   //window['onloadFuncts'].push(setUpSocket);
@@ -637,35 +556,18 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
   // this is necessary to keep infinite loops of events firing,
   // since goToRevision changes the slider position
   var goToRevisionIfEnabledCount = 0;
-  var goToRevisionIfEnabled = function()
+  var goToRevisionIfEnabled = function() {
+    if (goToRevisionIfEnabledCount > 0)
     {
-      if (goToRevisionIfEnabledCount > 0)
-      {
-        goToRevisionIfEnabledCount--;
-      }
-      else
-      {
-        goToRevision.apply(goToRevision, arguments);
-      }
-      }
-      
-      
-      
-      
+      goToRevisionIfEnabledCount--;
+    }
+    else
+    {
+      goToRevision.apply(goToRevision, arguments);
+    }
+  }
       
   BroadcastSlider.onSlider(goToRevisionIfEnabled);
-
-  (function()
-  {
-    for (var i = 0; i < clientVars.initialChangesets.length; i++)
-    {
-      var csgroup = clientVars.initialChangesets[i];
-      var start = clientVars.initialChangesets[i].start;
-      var granularity = clientVars.initialChangesets[i].granularity;
-      debugLog("loading changest on startup: ", start, granularity, csgroup);
-      changesetLoader.handleResponse(csgroup, start, granularity, null);
-    }
-  })();
 
   var dynamicCSS = makeCSSManager('dynamicsyntax');
   var authorData = {};
@@ -686,7 +588,7 @@ function loadBroadcastJS(socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
     }
   }
 
-  receiveAuthorData(clientVars.historicalAuthorData);
+  receiveAuthorData(clientVars.collab_client_vars.historicalAuthorData);
 
   return changesetLoader;
 }

@@ -1,98 +1,103 @@
 var plugins = require("ep_etherpad-lite/static/js/pluginfw/plugins");
 var hooks = require("ep_etherpad-lite/static/js/pluginfw/hooks");
 var npm = require("npm");
-var registry = require("npm/lib/utils/npm-registry-client/index.js");
+var request = require("request");
 
-var withNpm = function (npmfn, cb) {
+var npmIsLoaded = false;
+var withNpm = function (npmfn) {
+  if(npmIsLoaded) return npmfn();
   npm.load({}, function (er) {
-    if (er) return cb({progress:1, error:er});
+    if (er) return npmfn(er);
+    npmIsLoaded = true;
     npm.on("log", function (message) {
-      cb({progress: 0.5, message:message.msg + ": " + message.pref});
+      console.log('npm: ',message)
     });
-    npmfn(function (er, data) {
-      if (er) return cb({progress:1, error:er.code + ": " + er.path});
-      if (!data) data = {};
-      data.progress = 1;
-      data.message = "Done.";
-      cb(data);
-    });
+    npmfn();
   });
 }
 
-// All these functions call their callback multiple times with
-// {progress:[0,1], message:STRING, error:object}. They will call it
-// with progress = 1 at least once, and at all times will either
-// message or error be present, not both. It can be called multiple
-// times for all values of propgress except for 1.
+var tasks = 0
+function wrapTaskCb(cb) {
+  tasks++
+  return function() {
+    cb && cb.apply(this, arguments);
+    tasks--;
+    if(tasks == 0) onAllTasksFinished();
+  }
+}
+function onAllTasksFinished() {
+  hooks.aCallAll("restartServer", {}, function () {});
+}
 
 exports.uninstall = function(plugin_name, cb) {
-  withNpm(
-    function (cb) {
-      npm.commands.uninstall([plugin_name], function (er) {
+  cb = wrapTaskCb(cb);
+  withNpm(function (er) {
+    if (er) return cb && cb(er);
+    npm.commands.uninstall([plugin_name], function (er) {
+      if (er) return cb && cb(er);
+      hooks.aCallAll("pluginUninstall", {plugin_name: plugin_name}, function (er, data) {
         if (er) return cb(er);
-        hooks.aCallAll("pluginUninstall", {plugin_name: plugin_name}, function (er, data) {
-          if (er) return cb(er);
-          plugins.update(cb);
-        });
+        plugins.update(cb);
       });
-    },
-    cb
-  );
+    });
+  });
 };
 
 exports.install = function(plugin_name, cb) {
-  withNpm(
-    function (cb) {
-      npm.commands.install([plugin_name], function (er) {
+  cb = wrapTaskCb(cb)
+  withNpm(function (er) {
+    if (er) return cb && cb(er);
+    npm.commands.install([plugin_name], function (er) {
+      if (er) return cb && cb(er);
+      hooks.aCallAll("pluginInstall", {plugin_name: plugin_name}, function (er, data) {
         if (er) return cb(er);
-        hooks.aCallAll("pluginInstall", {plugin_name: plugin_name}, function (er, data) {
-          if (er) return cb(er);
-          plugins.update(cb);
-        });
+        plugins.update(cb);
       });
-    },
-    cb
-  );
+    });
+  });
 };
 
-exports.searchCache = null;
+exports.availablePlugins = null;
+var cacheTimestamp = 0;
 
-exports.search = function(query, cache, cb) {
-  withNpm(
-    function (cb) {
-      var getData = function (cb) {
-        if (cache && exports.searchCache) {
-          cb(null, exports.searchCache);
-        } else {
-          registry.get(
-            "/-/all", null, 600, false, true,
-            function (er, data) {
-              if (er) return cb(er);
-              exports.searchCache = data;
-              cb(er, data);
-            }
-          );
-        }
+exports.getAvailablePlugins = function(maxCacheAge, cb) {
+  request("https://static.etherpad.org/plugins.json", function(er, response, plugins){
+    if (er) return cb && cb(er);
+    if(exports.availablePlugins && maxCacheAge && Math.round(+new Date/1000)-cacheTimestamp <= maxCacheAge) {
+      return cb && cb(null, exports.availablePlugins)
+    }
+    try {
+      plugins = JSON.parse(plugins);
+    } catch (err) {
+      console.error('error parsing plugins.json:', err);
+      plugins = [];
+    }
+    exports.availablePlugins = plugins;
+    cacheTimestamp = Math.round(+new Date/1000);
+    cb && cb(null, plugins)
+  });
+};
+
+
+exports.search = function(searchTerm, maxCacheAge, cb) {
+  exports.getAvailablePlugins(maxCacheAge, function(er, results) {
+    if(er) return cb && cb(er);
+    var res = {};
+    if (searchTerm)
+      searchTerm = searchTerm.toLowerCase();
+    for (var pluginName in results) { // for every available plugin
+      if (pluginName.indexOf(plugins.prefix) != 0) continue; // TODO: Also search in keywords here!
+
+      if(searchTerm && !~results[pluginName].name.toLowerCase().indexOf(searchTerm)
+         && (typeof results[pluginName].description != "undefined" && !~results[pluginName].description.toLowerCase().indexOf(searchTerm) )
+           ){
+           if(typeof results[pluginName].description === "undefined"){
+             console.debug('plugin without Description: %s', results[pluginName].name);
+           }
+           continue;
       }
-      getData(
-        function (er, data) {
-          if (er) return cb(er);
-          var res = {};
-          var i = 0;
-          for (key in data) {
-            if (   key.indexOf(plugins.prefix) == 0
-                && key.indexOf(query.pattern) != -1) {
-              i++;
-              if (i > query.offset
-                  && i <= query.offset + query.limit) {
-                res[key] = data[key];
-              }
-            }
-          }
-          cb(null, {results:res, query: query, total:i});
-        }
-      );
-    },
-    cb
-  );
+      res[pluginName] = results[pluginName];
+    }
+    cb && cb(null, res)
+  })
 };

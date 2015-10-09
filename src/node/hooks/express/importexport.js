@@ -5,7 +5,7 @@ var importHandler = require('../../handler/ImportHandler');
 
 exports.expressCreateServer = function (hook_name, args, cb) {
   args.app.get('/p/:pad/:rev?/export/:type', function(req, res, next) {
-    var types = ["pdf", "doc", "txt", "html", "odt", "dokuwiki"];
+    var types = ["pdf", "doc", "txt", "html", "odt", "etherpad"];
     //send a 404 if we don't support this filetype
     if (types.indexOf(req.params.type) == -1) {
       next();
@@ -15,7 +15,7 @@ exports.expressCreateServer = function (hook_name, args, cb) {
     //if abiword is disabled, and this is a format we only support with abiword, output a message
     if (settings.abiword == null &&
        ["odt", "pdf", "doc"].indexOf(req.params.type) !== -1) {
-      res.send("Abiword is not enabled at this Etherpad Lite instance. Set the path to Abiword in settings.json to enable this feature");
+      res.send("Abiword is not enabled at this Etherpad instance. Set the path to Abiword in settings.json to enable this feature");
       return;
     }
 
@@ -28,12 +28,6 @@ exports.expressCreateServer = function (hook_name, args, cb) {
 
   //handle import requests
   args.app.post('/p/:pad/import', function(req, res, next) {
-    //if abiword is disabled, skip handling this request
-    if(settings.abiword == null) {
-      next();
-      return; 
-    }
-
     hasPadAccess(req, res, function() {
       importHandler.doImport(req, res, req.params.pad);
     });

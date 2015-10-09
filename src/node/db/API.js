@@ -30,11 +30,13 @@ var async = require("async");
 var exportHtml = require("../utils/ExportHtml");
 var importHtml = require("../utils/ImportHtml");
 var cleanText = require("./Pad").cleanText;
+var PadDiff = require("../utils/padDiff");
 
 /**********************/
 /**GROUP FUNCTIONS*****/
 /**********************/
 
+exports.listAllGroups = groupManager.listAllGroups;
 exports.createGroup = groupManager.createGroup;
 exports.createGroupIfNotExistsFor = groupManager.createGroupIfNotExistsFor;
 exports.deleteGroup = groupManager.deleteGroup;
@@ -42,11 +44,21 @@ exports.listPads = groupManager.listPads;
 exports.createGroupPad = groupManager.createGroupPad;
 
 /**********************/
+/**PADLIST FUNCTION****/
+/**********************/
+
+exports.listAllPads = padManager.listAllPads;
+
+/**********************/
 /**AUTHOR FUNCTIONS****/
 /**********************/
 
 exports.createAuthor = authorManager.createAuthor;
 exports.createAuthorIfNotExistsFor = authorManager.createAuthorIfNotExistsFor;
+exports.getAuthorName = authorManager.getAuthorName;
+exports.listPadsOfAuthor = authorManager.listPadsOfAuthor;
+exports.padUsers = padMessageHandler.padUsers;
+exports.padUsersCount = padMessageHandler.padUsersCount;
 
 /**********************/
 /**SESSION FUNCTIONS***/
@@ -61,6 +73,129 @@ exports.listSessionsOfAuthor = sessionManager.listSessionsOfAuthor;
 /************************/
 /**PAD CONTENT FUNCTIONS*/
 /************************/
+
+/**
+getAttributePool(padID) returns the attribute pool of a pad
+
+Example returns:
+{
+ "code":0,
+ "message":"ok",
+ "data": {
+    "pool":{
+        "numToAttrib":{
+            "0":["author","a.X4m8bBWJBZJnWGSh"],
+            "1":["author","a.TotfBPzov54ihMdH"],
+            "2":["author","a.StiblqrzgeNTbK05"],
+            "3":["bold","true"]
+        },
+        "attribToNum":{
+            "author,a.X4m8bBWJBZJnWGSh":0,
+            "author,a.TotfBPzov54ihMdH":1,
+            "author,a.StiblqrzgeNTbK05":2,
+            "bold,true":3
+        },
+        "nextNum":4
+    }
+ }
+}
+
+*/
+exports.getAttributePool = function (padID, callback) 
+{
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if (ERR(err, callback)) return;
+    callback(null, {pool: pad.pool});
+  });
+}
+
+/**
+getRevisionChangeset (padID, [rev])
+
+get the changeset at a given revision, or last revision if 'rev' is not defined.
+
+Example returns:
+{
+    "code" : 0,
+    "message" : "ok",
+    "data" : "Z:1>6b|5+6b$Welcome to Etherpad!\n\nThis pad text is synchronized as you type, so that everyone viewing this page sees the same text. This allows you to collaborate seamlessly on documents!\n\nGet involved with Etherpad at http://etherpad.org\n"
+}
+
+*/
+exports.getRevisionChangeset = function(padID, rev, callback)
+{
+  // check if rev is set
+  if (typeof rev === "function")
+  {
+    callback = rev;
+    rev = undefined;
+  }
+
+  // check if rev is a number
+  if (rev !== undefined && typeof rev !== "number")
+  {
+    // try to parse the number
+    if (!isNaN(parseInt(rev)))
+    {
+      rev = parseInt(rev);
+    }
+    else
+    {
+      callback(new customError("rev is not a number", "apierror"));
+      return;
+    }
+  }
+
+  // ensure this is not a negative number
+  if (rev !== undefined && rev < 0)
+  {
+    callback(new customError("rev is not a negative number", "apierror"));
+    return;
+  }
+
+  // ensure this is not a float value
+  if (rev !== undefined && !is_int(rev))
+  {
+    callback(new customError("rev is a float value", "apierror"));
+    return;
+  }
+
+  // get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+    
+    //the client asked for a special revision
+    if(rev !== undefined)
+    {
+      //check if this is a valid revision
+      if(rev > pad.getHeadRevisionNumber())
+      {
+        callback(new customError("rev is higher than the head revision of the pad","apierror"));
+        return;
+      }
+      
+      //get the changeset for this revision
+      pad.getRevisionChangeset(rev, function(err, changeset)
+      {
+        if(ERR(err, callback)) return;
+        
+        callback(null, changeset);
+      })
+    }
+    //the client wants the latest changeset, lets return it to him
+    else
+    {
+      pad.getRevisionChangeset(pad.getHeadRevisionNumber(), function(err, changeset)
+      {
+        if(ERR(err, callback)) return;
+
+        callback(null, changeset);
+      })
+    }
+  });
+}
 
 /**
 getText(padID, [rev]) returns the text of a pad 
@@ -128,7 +263,7 @@ exports.getText = function(padID, rev, callback)
       {
         if(ERR(err, callback)) return;
         
-        data = {text: atext.text};
+        var data = {text: atext.text};
         
         callback(null, data);
       })
@@ -152,6 +287,13 @@ Example returns:
 */
 exports.setText = function(padID, text, callback)
 {    
+  //text is required
+  if(typeof text != "string")
+  {
+    callback(new customError("text is no string","apierror"));
+    return;
+  }
+
   //get the pad
   getPadSafe(padID, true, function(err, pad)
   {
@@ -224,7 +366,9 @@ exports.getHTML = function(padID, rev, callback)
       exportHtml.getPadHTML(pad, rev, function(err, html)
       {
           if(ERR(err, callback)) return;
-          data = {html: html};
+          html = "<!DOCTYPE HTML><html><body>" +html; // adds HTML head
+          html += "</body></html>";
+          var data = {html: html};
           callback(null, data);
       });
     }
@@ -234,29 +378,151 @@ exports.getHTML = function(padID, rev, callback)
       exportHtml.getPadHTML(pad, undefined, function (err, html)
       {
         if(ERR(err, callback)) return;
-        
-        data = {html: html};
-          
+        html = "<!DOCTYPE HTML><html><body>" +html; // adds HTML head
+        html += "</body></html>";
+        var data = {html: html};
         callback(null, data);
       });
     }
   });
 }
 
+/**
+setHTML(padID, html) sets the text of a pad based on HTML
+
+Example returns:
+
+{code: 0, message:"ok", data: null}
+{code: 1, message:"padID does not exist", data: null}
+*/
 exports.setHTML = function(padID, html, callback)
 {
+  //html is required
+  if(typeof html != "string")
+  {
+    callback(new customError("html is no string","apierror"));
+    return;
+  }
+
   //get the pad
   getPadSafe(padID, true, function(err, pad)
   {
     if(ERR(err, callback)) return;
 
     // add a new changeset with the new html to the pad
-    importHtml.setPadHTML(pad, cleanText(html));
-
-    //update the clients on the pad
-    padMessageHandler.updatePadClients(pad, callback);
-
+    importHtml.setPadHTML(pad, cleanText(html), function(e){
+      if(e){
+        callback(new customError("HTML is malformed","apierror"));
+        return;
+      }else{
+        //update the clients on the pad
+        padMessageHandler.updatePadClients(pad, callback);
+        return;
+      }
+    });
   });
+}
+
+/******************/
+/**CHAT FUNCTIONS */
+/******************/
+
+/**
+getChatHistory(padId, start, end), returns a part of or the whole chat-history of this pad
+
+Example returns:
+
+{"code":0,"message":"ok","data":{"messages":[{"text":"foo","authorID":"a.foo","time":1359199533759,"userName":"test"},
+                                             {"text":"bar","authorID":"a.foo","time":1359199534622,"userName":"test"}]}}
+
+{code: 1, message:"start is higher or equal to the current chatHead", data: null}
+
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.getChatHistory = function(padID, start, end, callback)
+{
+  if(start && end)
+  {
+    if(start < 0)
+    {
+      callback(new customError("start is below zero","apierror"));
+      return;
+    }
+    if(end < 0)
+    {
+      callback(new customError("end is below zero","apierror"));
+      return;
+    }
+    if(start > end)
+    {
+      callback(new customError("start is higher than end","apierror"));
+      return;
+    }
+  }
+  
+  //get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+    var chatHead = pad.chatHead;
+    
+    // fall back to getting the whole chat-history if a parameter is missing
+    if(!start || !end)
+    {
+    start = 0;
+    end = pad.chatHead;
+    }
+    
+    if(start > chatHead)
+    {
+      callback(new customError("start is higher than the current chatHead","apierror"));
+      return;
+    }
+    if(end > chatHead)
+    {
+      callback(new customError("end is higher than the current chatHead","apierror"));
+      return;
+    }
+    
+    // the the whole message-log and return it to the client
+    pad.getChatMessages(start, end,
+      function(err, msgs)
+      {
+        if(ERR(err, callback)) return;
+        callback(null, {messages: msgs});
+      });
+  });
+}
+
+/**
+appendChatMessage(padID, text, authorID, time), creates a chat message for the pad id, time is a timestamp
+
+Example returns:
+
+{code: 0, message:"ok", data: null}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.appendChatMessage = function(padID, text, authorID, time, callback)
+{
+  //text is required
+  if(typeof text != "string")
+  {
+    callback(new customError("text is no string","apierror"));
+    return;
+  }
+  
+  // if time is not an integer value
+  if(time === undefined || !is_int(time))
+  {
+    // set time to current timestamp
+    time = new Date().getTime();
+  }
+
+  var padMessage = require("ep_etherpad-lite/node/handler/PadMessageHandler.js");
+  // save chat message to database and send message to all connected clients
+  padMessage.sendChatMessageToPadClients(parseInt(time), authorID, text, padID);
+
+  callback();
 }
 
 /*****************/
@@ -283,6 +549,138 @@ exports.getRevisionsCount = function(padID, callback)
 }
 
 /**
+getSavedRevisionsCount(padID) returns the number of saved revisions of this pad
+
+Example returns:
+
+{code: 0, message:"ok", data: {savedRevisions: 42}}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.getSavedRevisionsCount = function(padID, callback)
+{
+  //get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+
+    callback(null, {savedRevisions: pad.getSavedRevisionsNumber()});
+  });
+}
+
+/**
+listSavedRevisions(padID) returns the list of saved revisions of this pad
+
+Example returns:
+
+{code: 0, message:"ok", data: {savedRevisions: [2, 42, 1337]}}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.listSavedRevisions = function(padID, callback)
+{
+  //get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+
+    callback(null, {savedRevisions: pad.getSavedRevisionsList()});
+  });
+}
+
+/**
+saveRevision(padID) returns the list of saved revisions of this pad
+
+Example returns:
+
+{code: 0, message:"ok", data: null}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.saveRevision = function(padID, rev, callback)
+{
+  //check if rev is set
+  if(typeof rev == "function")
+  {
+    callback = rev;
+    rev = undefined;
+  }
+
+  //check if rev is a number
+  if(rev !== undefined && typeof rev != "number")
+  {
+    //try to parse the number
+    if(!isNaN(parseInt(rev)))
+    {
+      rev = parseInt(rev);
+    }
+    else
+    {
+      callback(new customError("rev is not a number", "apierror"));
+      return;
+    }
+  }
+
+  //ensure this is not a negativ number
+  if(rev !== undefined && rev < 0)
+  {
+    callback(new customError("rev is a negativ number","apierror"));
+    return;
+  }
+
+  //ensure this is not a float value
+  if(rev !== undefined && !is_int(rev))
+  {
+    callback(new customError("rev is a float value","apierror"));
+    return;
+  }
+
+  //get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+
+    //the client asked for a special revision
+    if(rev !== undefined)
+    {
+      //check if this is a valid revision
+      if(rev > pad.getHeadRevisionNumber())
+      {
+        callback(new customError("rev is higher than the head revision of the pad","apierror"));
+        return;
+      }
+    } else {
+      rev = pad.getHeadRevisionNumber();
+    }
+
+    authorManager.createAuthor('API', function(err, author) {
+      if(ERR(err, callback)) return;
+
+      pad.addSavedRevision(rev, author.authorID, 'Saved through API call');
+      callback();
+    });
+  });
+}
+
+/**
+getLastEdited(padID) returns the timestamp of the last revision of the pad
+
+Example returns:
+
+{code: 0, message:"ok", data: {lastEdited: 1340815946602}}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.getLastEdited = function(padID, callback)
+{
+  //get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+    pad.getLastEdit(function(err, value) {
+      if(ERR(err, callback)) return;
+      callback(null, {lastEdited: value});
+    });
+  });
+}
+
+/**
 createPad(padName [, text]) creates a new pad in this group 
 
 Example returns:
@@ -293,12 +691,21 @@ Example returns:
 exports.createPad = function(padID, text, callback)
 {  
   //ensure there is no $ in the padID
-  if(padID && padID.indexOf("$") != -1)
+  if(padID)
   {
-    callback(new customError("createPad can't create group pads","apierror"));
-    return;
+    if(padID.indexOf("$") != -1)
+    {
+      callback(new customError("createPad can't create group pads","apierror"));
+      return;
+    }
+    //check for url special characters
+    else if(padID.match(/(\/|\?|&|#)/))
+    {
+      callback(new customError("malformed padID: Remove special characters","apierror"));
+      return;
+    }
   }
-  
+
   //create pad
   getPadSafe(padID, false, text, function(err)
   {
@@ -324,7 +731,158 @@ exports.deletePad = function(padID, callback)
     pad.remove(callback);
   });
 }
+/**
+ restoreRevision(padID, [rev]) Restores revision from past as new changeset
 
+ Example returns:
+
+ {code:0, message:"ok", data:null}
+ {code: 1, message:"padID does not exist", data: null}
+ */
+exports.restoreRevision = function (padID, rev, callback)
+{
+  var Changeset = require("ep_etherpad-lite/static/js/Changeset");
+  var padMessage = require("ep_etherpad-lite/node/handler/PadMessageHandler.js");
+
+  //check if rev is a number
+  if (rev !== undefined && typeof rev != "number")
+  {
+    //try to parse the number
+    if (!isNaN(parseInt(rev)))
+    {
+      rev = parseInt(rev);
+    }
+    else
+    {
+      callback(new customError("rev is not a number", "apierror"));
+      return;
+    }
+  }
+
+  //ensure this is not a negativ number
+  if (rev !== undefined && rev < 0)
+  {
+    callback(new customError("rev is a negativ number", "apierror"));
+    return;
+  }
+
+  //ensure this is not a float value
+  if (rev !== undefined && !is_int(rev))
+  {
+    callback(new customError("rev is a float value", "apierror"));
+    return;
+  }
+
+  //get the pad
+  getPadSafe(padID, true, function (err, pad)
+  {
+    if (ERR(err, callback)) return;
+
+
+    //check if this is a valid revision
+    if (rev > pad.getHeadRevisionNumber())
+    {
+      callback(new customError("rev is higher than the head revision of the pad", "apierror"));
+      return;
+    }
+
+    pad.getInternalRevisionAText(rev, function (err, atext)
+    {
+      if (ERR(err, callback)) return;
+
+      var oldText = pad.text();
+      atext.text += "\n";
+      function eachAttribRun(attribs, func)
+      {
+        var attribsIter = Changeset.opIterator(attribs);
+        var textIndex = 0;
+        var newTextStart = 0;
+        var newTextEnd = atext.text.length;
+        while (attribsIter.hasNext())
+        {
+          var op = attribsIter.next();
+          var nextIndex = textIndex + op.chars;
+          if (!(nextIndex <= newTextStart || textIndex >= newTextEnd))
+          {
+            func(Math.max(newTextStart, textIndex), Math.min(newTextEnd, nextIndex), op.attribs);
+          }
+          textIndex = nextIndex;
+        }
+      }
+
+      // create a new changeset with a helper builder object
+      var builder = Changeset.builder(oldText.length);
+
+      // assemble each line into the builder
+      eachAttribRun(atext.attribs, function (start, end, attribs)
+      {
+        builder.insert(atext.text.substring(start, end), attribs);
+      });
+
+      var lastNewlinePos = oldText.lastIndexOf('\n');
+      if (lastNewlinePos < 0)
+      {
+        builder.remove(oldText.length - 1, 0);
+      } else
+      {
+        builder.remove(lastNewlinePos, oldText.match(/\n/g).length - 1);
+        builder.remove(oldText.length - lastNewlinePos - 1, 0);
+      }
+
+      var changeset = builder.toString();
+
+      //append the changeset
+      pad.appendRevision(changeset);
+      //
+      padMessage.updatePadClients(pad, function ()
+      {
+      });
+      callback(null, null);
+    });
+
+  });
+};
+
+/**
+copyPad(sourceID, destinationID[, force=false]) copies a pad. If force is true, 
+  the destination will be overwritten if it exists.
+
+Example returns:
+
+{code: 0, message:"ok", data: {padID: destinationID}}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.copyPad = function(sourceID, destinationID, force, callback)
+{
+  getPadSafe(sourceID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+    
+    pad.copy(destinationID, force, callback);
+  });
+}
+
+/**
+movePad(sourceID, destinationID[, force=false]) moves a pad. If force is true, 
+  the destination will be overwritten if it exists.
+
+Example returns:
+
+{code: 0, message:"ok", data: {padID: destinationID}}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.movePad = function(sourceID, destinationID, force, callback)
+{
+  getPadSafe(sourceID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+    
+    pad.copy(destinationID, force, function(err) {
+      if(ERR(err, callback)) return;
+      pad.remove(callback);
+    });
+  });
+}
 /**
 getReadOnlyLink(padID) returns the read only link of a pad 
 
@@ -346,6 +904,32 @@ exports.getReadOnlyID = function(padID, callback)
       if(ERR(err, callback)) return;
       callback(null, {readOnlyID: readOnlyId});
     });
+  });
+}
+
+/**
+getPadID(roID) returns the padID of a pad based on the readonlyID(roID)
+
+Example returns:
+
+{code: 0, message:"ok", data: {padID: padID}}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.getPadID = function(roID, callback)
+{
+  //get the PadId
+  readOnlyManager.getPadId(roID, function(err, retrievedPadID)
+  {
+    if(ERR(err, callback)) return;
+
+    if(retrievedPadID == null)
+    {
+      callback(new customError("padID does not exist","apierror"));
+    }
+    else
+    {
+      callback(null, {padID: retrievedPadID});
+    }
   });
 }
 
@@ -431,7 +1015,7 @@ exports.setPassword = function(padID, password, callback)
     if(ERR(err, callback)) return;
     
     //set the password
-    pad.setPassword(password);
+    pad.setPassword(password == "" ? null : password);
     
     callback();
   });
@@ -460,6 +1044,169 @@ exports.isPasswordProtected = function(padID, callback)
     if(ERR(err, callback)) return;
     
     callback(null, {isPasswordProtected: pad.isPasswordProtected()});
+  });
+}
+
+/**
+listAuthorsOfPad(padID) returns an array of authors who contributed to this pad 
+
+Example returns:
+
+{code: 0, message:"ok", data: {authorIDs : ["a.s8oes9dhwrvt0zif", "a.akf8finncvomlqva"]}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.listAuthorsOfPad = function(padID, callback)
+{
+  //get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+    
+    callback(null, {authorIDs: pad.getAllAuthors()});
+  });
+}
+
+/**
+sendClientsMessage(padID, msg) sends a message to all clients connected to the
+pad, possibly for the purpose of signalling a plugin.
+
+Note, this will only accept strings from the HTTP API, so sending bogus changes
+or chat messages will probably not be possible.
+
+The resulting message will be structured like so:
+
+{
+  type: 'COLLABROOM',
+  data: {
+    type: <msg>,
+    time: <time the message was sent>
+  }
+}
+
+Example returns:
+
+{code: 0, message:"ok"}
+{code: 1, message:"padID does not exist"}
+*/
+
+exports.sendClientsMessage = function (padID, msg, callback) {
+  getPadSafe(padID, true, function (err, pad) {
+    if (ERR(err, callback)) {
+      return;
+    } else {
+      padMessageHandler.handleCustomMessage(padID, msg, callback);
+    }
+  } );
+}
+
+/**
+checkToken() returns ok when the current api token is valid
+
+Example returns:
+
+{"code":0,"message":"ok","data":null}
+{"code":4,"message":"no or wrong API Key","data":null}
+*/
+exports.checkToken = function(callback)
+{
+  callback();
+}
+
+/**
+getChatHead(padID) returns the chatHead (last number of the last chat-message) of the pad
+
+Example returns:
+
+{code: 0, message:"ok", data: {chatHead: 42}}
+{code: 1, message:"padID does not exist", data: null}
+*/
+exports.getChatHead = function(padID, callback)
+{
+  //get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(ERR(err, callback)) return;
+    callback(null, {chatHead: pad.chatHead});
+  });
+}
+
+/**
+createDiffHTML(padID, startRev, endRev) returns an object of diffs from 2 points in a pad
+
+Example returns:
+
+{"code":0,"message":"ok","data":{"html":"<style>\n.authora_HKIv23mEbachFYfH {background-color: #a979d9}\n.authora_n4gEeMLsv1GivNeh {background-color: #a9b5d9}\n.removed {text-decoration: line-through; -ms-filter:'progid:DXImageTransform.Microsoft.Alpha(Opacity=80)'; filter: alpha(opacity=80); opacity: 0.8; }\n</style>Welcome to Etherpad!<br><br>This pad text is synchronized as you type, so that everyone viewing this page sees the same text. This allows you to collaborate seamlessly on documents!<br><br>Get involved with Etherpad at <a href=\"http&#x3a;&#x2F;&#x2F;etherpad&#x2e;org\">http:&#x2F;&#x2F;etherpad.org</a><br><span class=\"authora_HKIv23mEbachFYfH\">aw</span><br><br>","authors":["a.HKIv23mEbachFYfH",""]}}
+{"code":4,"message":"no or wrong API Key","data":null}
+*/
+exports.createDiffHTML = function(padID, startRev, endRev, callback){
+  //check if rev is a number
+  if(startRev !== undefined && typeof startRev != "number")
+  {
+    //try to parse the number
+    if(!isNaN(parseInt(startRev)))
+    {
+      startRev = parseInt(startRev, 10);
+    }
+    else
+    {
+      callback({stop: "startRev is not a number"});
+      return;
+    }
+  }
+ 
+  //check if rev is a number
+  if(endRev !== undefined && typeof endRev != "number")
+  {
+    //try to parse the number
+    if(!isNaN(parseInt(endRev)))
+    {
+      endRev = parseInt(endRev, 10);
+    }
+    else
+    {
+      callback({stop: "endRev is not a number"});
+      return;
+    }
+  }
+ 
+  //get the pad
+  getPadSafe(padID, true, function(err, pad)
+  {
+    if(err){
+      return callback(err);
+    }
+ 
+    try {
+      var padDiff = new PadDiff(pad, startRev, endRev);
+    } catch(e) {
+      return callback({stop:e.message});
+    }
+    var html, authors;
+ 
+    async.series([
+      function(callback){
+        padDiff.getHtml(function(err, _html){
+          if(err){
+            return callback(err);
+          }
+ 
+          html = _html;
+          callback();
+        });
+      },
+      function(callback){
+        padDiff.getAuthors(function(err, _authors){
+          if(err){
+            return callback(err);
+          }
+ 
+          authors = _authors;
+          callback();
+        });
+      }
+    ], function(err){
+      callback(err, {html: html, authors: authors})
+    });
   });
 }
 

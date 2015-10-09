@@ -1,5 +1,6 @@
 var log4js = require('log4js');
 var apiLogger = log4js.getLogger("API");
+var clientLogger = log4js.getLogger("client");
 var formidable = require('formidable');
 var apiHandler = require('../../handler/APIHandler');
 
@@ -7,7 +8,7 @@ var apiHandler = require('../../handler/APIHandler');
 var apiCaller = function(req, res, fields) {
   res.header("Content-Type", "application/json; charset=utf-8");
 
-  apiLogger.info("REQUEST, " + req.params.func + ", " + JSON.stringify(fields));
+  apiLogger.info("REQUEST, v"+ req.params.version + ":" + req.params.func + ", " + JSON.stringify(fields));
 
   //wrap the send function so we can log the response
   //note: res._send seems to be already in use, so better use a "unique" name
@@ -24,28 +25,28 @@ var apiCaller = function(req, res, fields) {
   }
 
   //call the api handler
-  apiHandler.handle(req.params.func, fields, req, res);
+  apiHandler.handle(req.params.version, req.params.func, fields, req, res);
 }
 
 exports.apiCaller = apiCaller;
 
 exports.expressCreateServer = function (hook_name, args, cb) {
   //This is a api GET call, collect all post informations and pass it to the apiHandler
-  args.app.get('/api/1/:func', function (req, res) {
+  args.app.get('/api/:version/:func', function (req, res) {
     apiCaller(req, res, req.query)
   });
 
   //This is a api POST call, collect all post informations and pass it to the apiHandler
-  args.app.post('/api/1/:func', function(req, res) {
+  args.app.post('/api/:version/:func', function(req, res) {
     new formidable.IncomingForm().parse(req, function (err, fields, files) {
       apiCaller(req, res, fields)
     });
   });
 
-  //The Etherpad client side sends information about how a disconnect happen
+  //The Etherpad client side sends information about how a disconnect happened
   args.app.post('/ep/pad/connection-diagnostic-info', function(req, res) {
     new formidable.IncomingForm().parse(req, function(err, fields, files) { 
-      console.log("DIAGNOSTIC-INFO: " + fields.diagnosticInfo);
+      clientLogger.info("DIAGNOSTIC-INFO: " + fields.diagnosticInfo);
       res.end("OK");
     });
   });
@@ -53,8 +54,18 @@ exports.expressCreateServer = function (hook_name, args, cb) {
   //The Etherpad client side sends information about client side javscript errors
   args.app.post('/jserror', function(req, res) {
     new formidable.IncomingForm().parse(req, function(err, fields, files) { 
-      console.error("CLIENT SIDE JAVASCRIPT ERROR: " + fields.errorInfo);
+      try {
+        var data = JSON.parse(fields.errorInfo)
+      }catch(e){
+        return res.end()
+      }
+      clientLogger.warn(data.msg+' --', data);
       res.end("OK");
     });
+  });
+  
+  //Provide a possibility to query the latest available API version
+  args.app.get('/api', function (req, res) {
+     res.json({"currentVersion" : apiHandler.latestApiVersion});
   });
 }

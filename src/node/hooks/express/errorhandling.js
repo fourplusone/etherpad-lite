@@ -1,5 +1,6 @@
 var os = require("os");
 var db = require('../../db/DB');
+var stats = require('ep_etherpad-lite/node/stats')
 
 
 exports.onShutdown = false;
@@ -16,9 +17,6 @@ exports.gracefulShutdown = function(err) {
 
   console.log("graceful shutdown...");
 
-  //stop the http server
-  exports.app.close();
-
   //do the db shutdown
   db.db.doShutdown(function() {
     console.log("db sucessfully closed.");
@@ -31,15 +29,20 @@ exports.gracefulShutdown = function(err) {
   }, 3000);
 }
 
+process.on('uncaughtException', exports.gracefulShutdown);
 
 exports.expressCreateServer = function (hook_name, args, cb) {
   exports.app = args.app;
 
-  args.app.error(function(err, req, res, next){
-    res.send(500);
-    console.error(err.stack ? err.stack : err.toString());
-    exports.gracefulShutdown();
-  });
+  // Handle errors
+  args.app.use(function(err, req, res, next){
+    // if an error occurs Connect will pass it down
+    // through these "error-handling" middleware
+    // allowing you to respond however you like
+    res.status(500).send({ error: 'Sorry, something bad happened!' });
+    console.error(err.stack? err.stack : err.toString());
+    stats.meter('http500').mark()
+  })
 
   //connect graceful shutdown with sigint and uncaughtexception
   if(os.type().indexOf("Windows") == -1) {
@@ -47,6 +50,4 @@ exports.expressCreateServer = function (hook_name, args, cb) {
     //https://github.com/joyent/node/issues/1553
     process.on('SIGINT', exports.gracefulShutdown);
   }
-
-  process.on('uncaughtException', exports.gracefulShutdown);
 }

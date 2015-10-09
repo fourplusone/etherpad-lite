@@ -6,16 +6,18 @@
 var ERR = require("async-stacktrace");
 var Changeset = require("ep_etherpad-lite/static/js/Changeset");
 var AttributePool = require("ep_etherpad-lite/static/js/AttributePool");
-var randomString = require('ep_etherpad-lite/static/js/pad_utils').randomString;
 var db = require("./DB").db;
 var async = require("async");
 var settings = require('../utils/Settings');
 var authorManager = require("./AuthorManager");
 var padManager = require("./PadManager");
 var padMessageHandler = require("../handler/PadMessageHandler");
+var groupManager = require("./GroupManager");
+var customError = require("../utils/customError");
 var readOnlyManager = require("./ReadOnlyManager");
 var crypto = require("crypto");
 var randomString = require("../utils/randomstring");
+var hooks = require('ep_etherpad-lite/static/js/pluginfw/hooks');
 
 //serialization/deserialization attributes
 var attributeBlackList = ["id"];
@@ -52,6 +54,21 @@ Pad.prototype.getHeadRevisionNumber = function getHeadRevisionNumber() {
   return this.head;
 };
 
+Pad.prototype.getSavedRevisionsNumber = function getSavedRevisionsNumber() {
+  return this.savedRevisions.length;
+};
+
+Pad.prototype.getSavedRevisionsList = function getSavedRevisionsList() {
+  var savedRev = new Array();
+  for(var rev in this.savedRevisions){
+    savedRev.push(this.savedRevisions[rev].revNum);
+  }
+  savedRev.sort(function(a, b) {
+    return a - b;
+  });
+  return savedRev;
+};
+
 Pad.prototype.getPublicStatus = function getPublicStatus() {
   return this.publicStatus;
 };
@@ -80,26 +97,42 @@ Pad.prototype.appendRevision = function appendRevision(aChangeset, author) {
     newRevData.meta.atext = this.atext;
   }
 
-  db.set("pad:"+this.id+":revs:"+newRev, newRevData);             
+  db.set("pad:"+this.id+":revs:"+newRev, newRevData);
   this.saveToDatabase();
+
+  // set the author to pad
+  if(author)
+    authorManager.addPad(author, this.id);
+
+  if (this.head == 0) {
+    hooks.callAll("padCreate", {'pad':this, 'author': author});
+  } else {
+    hooks.callAll("padUpdate", {'pad':this, 'author': author});
+  }
 };
 
 //save all attributes to the database
 Pad.prototype.saveToDatabase = function saveToDatabase(){
   var dbObject = {};
-  
+
   for(var attr in this){
     if(typeof this[attr] === "function") continue;
     if(attributeBlackList.indexOf(attr) !== -1) continue;
-    
+
     dbObject[attr] = this[attr];
-    
+
     if(jsonableList.indexOf(attr) !== -1){
       dbObject[attr] = dbObject[attr].toJsonable();
     }
   }
-  
+
   db.set("pad:"+this.id, dbObject);
+}
+
+// get time of last edit (changeset application)
+Pad.prototype.getLastEdit = function getLastEdit(callback){
+  var revNum = this.getHeadRevisionNumber();
+  db.getSub("pad:"+this.id+":revs:"+revNum, ["meta", "timestamp"], callback);
 }
 
 Pad.prototype.getRevisionChangeset = function getRevisionChangeset(revNum, callback) {
@@ -117,7 +150,7 @@ Pad.prototype.getRevisionDate = function getRevisionDate(revNum, callback) {
 Pad.prototype.getAllAuthors = function getAllAuthors() {
   var authors = [];
 
-  for(key in this.pool.numToAttrib)
+  for(var key in this.pool.numToAttrib)
   {
     if(this.pool.numToAttrib[key][0] == "author" && this.pool.numToAttrib[key][1] != "")
     {
@@ -184,7 +217,11 @@ Pad.prototype.getInternalRevisionAText = function getInternalRevisionAText(targe
       {
         curRev++;
         var cs = changesets[curRev];
-        atext = Changeset.applyToAText(cs, atext, apool);
+        try{
+          atext = Changeset.applyToAText(cs, atext, apool);
+        }catch(e) {
+          return callback(e)
+        }
       }
 
       callback(null);
@@ -194,6 +231,48 @@ Pad.prototype.getInternalRevisionAText = function getInternalRevisionAText(targe
     if(ERR(err, callback)) return;
     callback(null, atext);
   });
+};
+
+Pad.prototype.getRevision = function getRevisionChangeset(revNum, callback) {
+  db.get("pad:"+this.id+":revs:"+revNum, callback);
+};
+
+Pad.prototype.getAllAuthorColors = function getAllAuthorColors(callback){
+  var authors = this.getAllAuthors();
+  var returnTable = {};
+  var colorPalette = authorManager.getColorPalette();
+
+  async.forEach(authors, function(author, callback){
+    authorManager.getAuthorColorId(author, function(err, colorId){
+      if(err){
+        return callback(err);
+      }
+      //colorId might be a hex color or an number out of the palette
+      returnTable[author]=colorPalette[colorId] || colorId;
+
+      callback();
+    });
+  }, function(err){
+    callback(err, returnTable);
+  });
+};
+
+Pad.prototype.getValidRevisionRange = function getValidRevisionRange(startRev, endRev) {
+  startRev = parseInt(startRev, 10);
+  var head = this.getHeadRevisionNumber();
+  endRev = endRev ? parseInt(endRev, 10) : head;
+  if(isNaN(startRev) || startRev < 0 || startRev > head) {
+    startRev = null;
+  }
+  if(isNaN(endRev) || endRev < startRev) {
+    endRev = null;
+  } else if(endRev > head) {
+    endRev = head;
+  }
+  if(startRev !== null && endRev !== null) {
+    return { startRev: startRev , endRev: endRev }
+  }
+  return null;
 };
 
 Pad.prototype.getKeyRevisionNumber = function getKeyRevisionNumber(revNum) {
@@ -211,7 +290,14 @@ Pad.prototype.setText = function setText(newText) {
   var oldText = this.text();
 
   //create the changeset
-  var changeset = Changeset.makeSplice(oldText, 0, oldText.length-1, newText);
+  // We want to ensure the pad still ends with a \n, but otherwise keep
+  // getText() and setText() consistent.
+  var changeset;
+  if (newText[newText.length - 1] == '\n') {
+    changeset = Changeset.makeSplice(oldText, 0, oldText.length, newText);
+  } else {
+    changeset = Changeset.makeSplice(oldText, 0, oldText.length-1, newText);
+  }
 
   //append the changeset
   this.appendRevision(changeset);
@@ -264,27 +350,7 @@ Pad.prototype.getChatMessage = function getChatMessage(entryNum, callback) {
   });
 };
 
-Pad.prototype.getLastChatMessages = function getLastChatMessages(count, callback) {
-  //return an empty array if there are no chat messages
-  if(this.chatHead == -1)
-  {
-    callback(null, []);
-    return;
-  }
-
-  var _this = this;
-
-  //works only if we decrement the amount, for some reason
-  count--;
-
-  //set the startpoint
-  var start = this.chatHead-count;
-  if(start < 0)
-    start = 0;
-
-  //set the endpoint
-  var end = this.chatHead;
-
+Pad.prototype.getChatMessages = function getChatMessages(start, end, callback) {
   //collect the numbers of chat entries and in which order we need them
   var neededEntries = [];
   var order = 0;
@@ -293,6 +359,8 @@ Pad.prototype.getLastChatMessages = function getLastChatMessages(count, callback
     neededEntries.push({entryNum:i, order: order});
     order++;
   }
+
+  var _this = this;
 
   //get all entries out of the database
   var entries = [];
@@ -358,7 +426,160 @@ Pad.prototype.init = function init(text, callback) {
       _this.appendRevision(firstChangeset, '');
     }
 
+    hooks.callAll("padLoad", {'pad':_this});
     callback(null);
+  });
+};
+
+Pad.prototype.copy = function copy(destinationID, force, callback) {
+  var sourceID = this.id;
+  var _this = this;
+  var destGroupID;
+
+  // make force optional
+  if (typeof force == "function") {
+    callback = force;
+    force = false;
+  }
+  else if (force == undefined || force.toLowerCase() != "true") {
+    force = false;
+  }
+  else force = true;
+
+  //kick everyone from this pad
+  // TODO: this presents a message on the client saying that the pad was 'deleted'. Fix this?
+  padMessageHandler.kickSessionsFromPad(sourceID);
+
+  // flush the source pad:
+  _this.saveToDatabase();
+
+  async.series([
+    // if it's a group pad, let's make sure the group exists.
+    function(callback)
+    {
+      if (destinationID.indexOf("$") != -1)
+      {
+        destGroupID = destinationID.split("$")[0]
+        groupManager.doesGroupExist(destGroupID, function (err, exists)
+        {
+          if(ERR(err, callback)) return;
+
+          //group does not exist
+          if(exists == false)
+          {
+            callback(new customError("groupID does not exist for destinationID","apierror"));
+            return;
+          }
+          //everything is fine, continue
+          else
+          {
+            callback();
+          }
+        });
+      }
+      else
+        callback();
+    },
+    // if the pad exists, we should abort, unless forced.
+    function(callback)
+    {
+      padManager.doesPadExists(destinationID, function (err, exists)
+      {
+        if(ERR(err, callback)) return;
+
+        if(exists == true)
+        {
+          if (!force)
+          {
+            console.error("erroring out without force");
+            callback(new customError("destinationID already exists","apierror"));
+            console.error("erroring out without force - after");
+            return;
+          }
+          else // exists and forcing
+          {
+            padManager.getPad(destinationID, function(err, pad) {
+              if (ERR(err, callback)) return;
+              pad.remove(callback);
+            });
+          }
+        }
+        else
+        {
+          callback();
+        }
+      });
+    },
+    // copy the 'pad' entry
+    function(callback)
+    {
+      db.get("pad:"+sourceID, function(err, pad) {
+        db.set("pad:"+destinationID, pad);
+      });
+
+      callback();
+    },
+    //copy all relations
+    function(callback)
+    {
+      async.parallel([
+        //copy all chat messages
+        function(callback)
+        {
+          var chatHead = _this.chatHead;
+
+          for(var i=0;i<=chatHead;i++)
+          {
+            db.get("pad:"+sourceID+":chat:"+i, function (err, chat) {
+              if (ERR(err, callback)) return;
+              db.set("pad:"+destinationID+":chat:"+i, chat);
+            });
+          }
+
+          callback();
+        },
+        //copy all revisions
+        function(callback)
+        {
+          var revHead = _this.head;
+          for(var i=0;i<=revHead;i++)
+          {
+            db.get("pad:"+sourceID+":revs:"+i, function (err, rev) {
+              if (ERR(err, callback)) return;
+              db.set("pad:"+destinationID+":revs:"+i, rev);
+            });
+          }
+
+          callback();
+        },
+        //add the new pad to all authors who contributed to the old one
+        function(callback)
+        {
+          var authorIDs = _this.getAllAuthors();
+          authorIDs.forEach(function (authorID)
+          {
+            authorManager.addPad(authorID, destinationID);
+          });
+
+          callback();
+        },
+      // parallel
+      ], callback);
+    },
+    function(callback) {
+      // Group pad? Add it to the group's list
+      if(destGroupID) db.setSub("group:" + destGroupID, ["pads", destinationID], 1);
+
+      // Initialize the new pad (will update the listAllPads cache)
+      setTimeout(function(){
+        padManager.getPad(destinationID, null, callback) // this runs too early.
+      },10);
+    }
+  // series
+  ], function(err)
+  {
+    if(ERR(err, callback)) return;
+    callback(null, {padID: destinationID});
   });
 };
 
@@ -437,14 +658,26 @@ Pad.prototype.remove = function remove(callback) {
           }
 
           callback();
+        },
+        //remove pad from all authors who contributed
+        function(callback)
+        {
+          var authorIDs = _this.getAllAuthors();
+
+          authorIDs.forEach(function (authorID)
+          {
+            authorManager.removePad(authorID, padID);
+          });
+
+          callback();
         }
       ], callback);
     },
     //delete the pad entry and delete pad from padManager
     function(callback)
     {
-      db.remove("pad:"+padID);
-      padManager.unloadPad(padID);
+      padManager.removePad(padID);
+      hooks.callAll("padRemove", {'padID':padID});
       callback();
     }
   ], function(err)
@@ -475,11 +708,11 @@ Pad.prototype.isPasswordProtected = function isPasswordProtected() {
 Pad.prototype.addSavedRevision = function addSavedRevision(revNum, savedById, label) {
   //if this revision is already saved, return silently
   for(var i in this.savedRevisions){
-    if(this.savedRevisions.revNum === revNum){
+    if(this.savedRevisions[i] && this.savedRevisions[i].revNum === revNum){
       return;
     }
   }
-  
+
   //build the saved revision object
   var savedRevision = {};
   savedRevision.revNum = revNum;
@@ -487,7 +720,7 @@ Pad.prototype.addSavedRevision = function addSavedRevision(revNum, savedById, la
   savedRevision.label = label || "Revision " + revNum;
   savedRevision.timestamp = new Date().getTime();
   savedRevision.id = randomString(10);
-  
+
   //save this new saved revision
   this.savedRevisions.push(savedRevision);
   this.saveToDatabase();

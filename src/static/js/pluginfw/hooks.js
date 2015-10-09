@@ -1,14 +1,5 @@
-var plugins = require("ep_etherpad-lite/static/js/pluginfw/plugins");
-var _;
-
-/* FIXME: Ugly hack, in the future, use same code for server & client */
-if (plugins.isClient) {
-  var async = require("ep_etherpad-lite/static/js/pluginfw/async");  
-  var _ = require("ep_etherpad-lite/static/js/underscore");
-} else {
-  var async = require("async");
-  var _ = require("underscore");
-}
+var async = require("async");
+var _ = require("underscore");
 
 exports.bubbleExceptions = true
 
@@ -17,7 +8,7 @@ var hookCallWrapper = function (hook, hook_name, args, cb) {
 
   // Normalize output to list for both sync and async cases
   var normalize = function(x) {
-    if (x == undefined) return [];
+    if (x === undefined) return [];
     return x;
   }
   var normalizedhook = function () {
@@ -50,7 +41,7 @@ exports.syncMapFirst = function (lst, fn) {
 exports.mapFirst = function (lst, fn, cb) {
   var i = 0;
 
-  next = function () {
+  var next = function () {
     if (i >= lst.length) return cb(undefined);
     fn(lst[i++], function (err, result) {
       if (err) return cb(err);
@@ -70,7 +61,7 @@ exports.flatten = function (lst) {
       if (lst[i] != undefined && lst[i] != null) {
         for (var j = 0; j < lst[i].length; j++) {
           res.push(lst[i][j]);
-	}
+    }
       }
     }
   }
@@ -79,18 +70,20 @@ exports.flatten = function (lst) {
 
 exports.callAll = function (hook_name, args) {
   if (!args) args = {};
-  if (plugins.hooks[hook_name] === undefined) return [];
-  return _.flatten(_.map(plugins.hooks[hook_name], function (hook) {
-    return hookCallWrapper(hook, hook_name, args);
-  }), true);
+  if (exports.plugins){
+    if (exports.plugins.hooks[hook_name] === undefined) return [];
+    return _.flatten(_.map(exports.plugins.hooks[hook_name], function (hook) {
+      return hookCallWrapper(hook, hook_name, args);
+    }), true);
+  }
 }
 
 exports.aCallAll = function (hook_name, args, cb) {
   if (!args) args = {};
   if (!cb) cb = function () {};
-  if (plugins.hooks[hook_name] === undefined) return cb(null, []);
+  if (exports.plugins.hooks[hook_name] === undefined) return cb(null, []);
   async.map(
-    plugins.hooks[hook_name],
+    exports.plugins.hooks[hook_name],
     function (hook, cb) {
       hookCallWrapper(hook, hook_name, args, function (res) { cb(null, res); });
     },
@@ -102,8 +95,8 @@ exports.aCallAll = function (hook_name, args, cb) {
 
 exports.callFirst = function (hook_name, args) {
   if (!args) args = {};
-  if (plugins.hooks[hook_name][0] === undefined) return [];
-  return exports.syncMapFirst(plugins.hooks[hook_name], function (hook) {
+  if (exports.plugins.hooks[hook_name] === undefined) return [];
+  return exports.syncMapFirst(exports.plugins.hooks[hook_name], function (hook) {
     return hookCallWrapper(hook, hook_name, args);
   });
 }
@@ -111,9 +104,9 @@ exports.callFirst = function (hook_name, args) {
 exports.aCallFirst = function (hook_name, args, cb) {
   if (!args) args = {};
   if (!cb) cb = function () {};
-  if (plugins.hooks[hook_name] === undefined) return cb(null, []);
+  if (exports.plugins.hooks[hook_name] === undefined) return cb(null, []);
   exports.mapFirst(
-    plugins.hooks[hook_name],
+    exports.plugins.hooks[hook_name],
     function (hook, cb) {
       hookCallWrapper(hook, hook_name, args, function (res) { cb(null, res); });
     },

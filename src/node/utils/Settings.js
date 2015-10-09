@@ -1,5 +1,5 @@
 /**
- * The Settings Modul reads the settings out of settings.json and provides 
+ * The Settings Modul reads the settings out of settings.json and provides
  * this information to the other modules
  */
 
@@ -24,19 +24,53 @@ var os = require("os");
 var path = require('path');
 var argv = require('./Cli').argv;
 var npm = require("npm/lib/npm.js");
+var jsonminify = require("jsonminify");
+var log4js = require("log4js");
+var randomString = require("./randomstring");
+var suppressDisableMsg = " -- To suppress these warning messages change suppressErrorsInPadText to true in your settings.json\n";
+var _ = require("underscore");
 
 /* Root path of the installation */
 exports.root = path.normalize(path.join(npm.dir, ".."));
 
 /**
+ * The app title, visible e.g. in the browser window
+ */
+exports.title = "Etherpad";
+
+/**
+ * The app favicon fully specified url, visible e.g. in the browser window
+ */
+exports.favicon = "favicon.ico";
+exports.faviconPad = "../" + exports.favicon;
+exports.faviconTimeslider = "../../" + exports.favicon;
+
+/**
  * The IP ep-lite should listen to
  */
 exports.ip = "0.0.0.0";
-  
+
 /**
  * The Port ep-lite should listen to
  */
-exports.port = 9001;
+exports.port = process.env.PORT || 9001;
+
+/**
+ * Should we suppress Error messages from being in Pad Contents
+ */
+exports.suppressErrorsInPadText = false;
+
+/**
+ * The SSL signed server key and the Certificate Authority's own certificate
+ * default case: ep-lite does *not* use SSL. A signed server key is not required in this case.
+ */
+exports.ssl = false;
+
+/**
+ * socket.io transport methods
+ **/
+exports.socketTransportProtocols = ['xhr-polling', 'jsonp-polling', 'htmlfile'];
+
 /*
  * The Type of the database
  */
@@ -45,10 +79,48 @@ exports.dbType = "dirty";
  * This setting is passed with dbType to ueberDB to set up the database
  */
 exports.dbSettings = { "filename" : path.join(exports.root, "dirty.db") };
+
 /**
  * The default Text of a new pad
  */
-exports.defaultPadText = "Welcome to Etherpad Lite!\n\nThis pad text is synchronized as you type, so that everyone viewing this page sees the same text. This allows you to collaborate seamlessly on documents!\n\nEtherpad Lite on Github: http:\/\/j.mp/ep-lite\n";
+exports.defaultPadText = "Welcome to Etherpad!\n\nThis pad text is synchronized as you type, so that everyone viewing this page sees the same text. This allows you to collaborate seamlessly on documents!\n\nEtherpad on Github: https:\/\/github.com\/ether\/etherpad-lite\n";
+
+/**
+ * The default Pad Settings for a user (Can be overridden by changing the setting
+ */
+exports.padOptions = {
+  "noColors": false,
+  "showControls": true,
+  "showChat": true,
+  "showLineNumbers": true,
+  "useMonospaceFont": false,
+  "userName": false,
+  "userColor": false,
+  "rtl": false,
+  "alwaysShowChat": false,
+  "chatAndUsers": false,
+  "lang": "en-gb"
+}
+
+/**
+ * The toolbar buttons and order.
+ */
+exports.toolbar = {
+  left: [
+    ["bold", "italic", "underline", "strikethrough"],
+    ["orderedlist", "unorderedlist", "indent", "outdent"],
+    ["undo", "redo"],
+    ["clearauthorship"]
+  ],
+  right: [
+    ["importexport", "timeslider", "savedrevision"],
+    ["settings", "embed"],
+    ["showusers"]
+  ],
+  timeslider: [
+    ["timeslider_export", "timeslider_settings", "timeslider_returnToPad"]
+  ]
+}
 
 /**
  * A flag that requires any user to have a valid session (via the api) before accessing a pad
@@ -59,6 +131,11 @@ exports.requireSession = false;
  * A flag that prevents users from creating new pads
  */
 exports.editOnly = false;
+
+/**
+ * A flag that bypasses password prompts for users with valid sessions
+ */
+exports.sessionNoPassword = false;
 
 /**
  * Max age that responses will have (affects caching layer).
@@ -76,9 +153,44 @@ exports.minify = true;
 exports.abiword = null;
 
 /**
+ * The path of the tidy executable
+ */
+exports.tidyHtml = null;
+
+/**
+ * Should we support none natively supported file types on import?
+ */
+exports.allowUnknownFileEnds = true;
+
+/**
  * The log level of log4js
  */
 exports.loglevel = "INFO";
+
+/**
+ * Disable IP logging
+ */
+exports.disableIPlogging = false;
+
+/**
+ * Disable Load Testing
+ */
+exports.loadTest = false;
+
+/*
+* log4js appender configuration
+*/
+exports.logconfig = { appenders: [{ type: "console" }]};
+
+/*
+* Session Key, do not sure this.
+*/
+exports.sessionKey = false;
+
+/*
+* Trust Proxy, whether or not trust the x-forwarded-for header.
+*/
+exports.trustProxy = false;
 
 /* This setting is used if you need authentication and/or
  * authorization. Note: /admin always requires authentication, and
@@ -98,61 +210,130 @@ exports.abiwordAvailable = function()
   {
     return "no";
   }
-}
+};
 
-// Discover where the settings file lives
-var settingsFilename = argv.settings || "settings.json";
-if (settingsFilename.charAt(0) != '/') {
-    settingsFilename = path.normalize(path.join(root, settingsFilename));
-}
-
-var settingsStr
-try{
-  //read the settings sync
-  settingsStr = fs.readFileSync(settingsFilename).toString();
-} catch(e){
-  console.warn('No settings file found. Using defaults.');
-  settingsStr = '{}';
-}
-  
-//remove all comments
-settingsStr = settingsStr.replace(/\*([^*]|[\r\n]|(\*+([^*/]|[\r\n])))*\*+/gm,"").replace(/#.*/g,"").replace(/\/\/.*/g,"");
-
-//try to parse the settings
-var settings;
-try
-{
-  settings = JSON.parse(settingsStr);
-}
-catch(e)
-{
-  console.error("There is a syntax error in your settings.json file");
-  console.error(e.message);
-  process.exit(1);
-}
-
-//loop trough the settings
-for(var i in settings)
-{
-  //test if the setting start with a low character
-  if(i.charAt(0).search("[a-z]") !== 0)
+// Provide git version if available
+exports.getGitCommit = function() {
+  var version = "";
+  try
   {
-    console.warn("Settings should start with a low character: '" + i + "'");
+    var rootPath = path.resolve(npm.dir, '..');
+    var ref = fs.readFileSync(rootPath + "/.git/HEAD", "utf-8");
+    var refPath = rootPath + "/.git/" + ref.substring(5, ref.indexOf("\n"));
+    version = fs.readFileSync(refPath, "utf-8");
+    version = version.substring(0, 7);
+  }
+  catch(e)
+  {
+    console.warn("Can't get git version for server header\n" + e.message)
+  }
+  return version;
+}
+
+// Return etherpad version from package.json
+exports.getEpVersion = function() {
+  return require('ep_etherpad-lite/package.json').version;
+}
+
+exports.reloadSettings = function reloadSettings() {
+  // Discover where the settings file lives
+  var settingsFilename = argv.settings || "settings.json";
+
+  if (path.resolve(settingsFilename)===settingsFilename) {
+    settingsFilename = path.resolve(settingsFilename);
+  } else {
+    settingsFilename = path.resolve(path.join(exports.root, settingsFilename));
   }
 
-  //we know this setting, so we overwrite it
-  if(exports[i] !== undefined)
-  {
-    exports[i] = settings[i];
+  var settingsStr;
+  try{
+    //read the settings sync
+    settingsStr = fs.readFileSync(settingsFilename).toString();
+  } catch(e){
+    console.warn('No settings file found. Continuing using defaults!');
   }
-  //this setting is unkown, output a warning and throw it away
-  else
-  {
-    console.warn("Unkown Setting: '" + i + "'");
-    console.warn("This setting doesn't exist or it was removed");
-  }
-}
 
-if(exports.dbType === "dirty"){
-  console.warn("DirtyDB is used. This is fine for testing but not recommended for production.")
-}
+  // try to parse the settings
+  var settings;
+  try {
+    if(settingsStr) {
+      settingsStr = jsonminify(settingsStr).replace(",]","]").replace(",}","}");
+      settings = JSON.parse(settingsStr);
+    }
+  }catch(e){
+    console.error('There was an error processing your settings.json file: '+e.message);
+    process.exit(1);
+  }
+
+  //loop trough the settings
+  for(var i in settings)
+  {
+    //test if the setting start with a low character
+    if(i.charAt(0).search("[a-z]") !== 0)
+    {
+      console.warn("Settings should start with a low character: '" + i + "'");
+    }
+
+    //we know this setting, so we overwrite it
+    //or it's a settings hash, specific to a plugin
+    if(exports[i] !== undefined || i.indexOf('ep_')==0)
+    {
+      if (_.isObject(settings[i]) && !_.isArray(settings[i])) {
+        exports[i] = _.defaults(settings[i], exports[i]);
+      } else {
+        exports[i] = settings[i];
+      }
+    }
+    //this setting is unkown, output a warning and throw it away
+    else
+    {
+      console.warn("Unknown Setting: '" + i + "'. This setting doesn't exist or it was removed");
+    }
+  }
+
+  log4js.configure(exports.logconfig);//Configure the logging appenders
+  log4js.setGlobalLogLevel(exports.loglevel);//set loglevel
+  process.env['DEBUG'] = 'socket.io:' + exports.loglevel; // Used by SocketIO for Debug
+  log4js.replaceConsole();
+
+  if(exports.abiword){
+    // Check abiword actually exists
+    if(exports.abiword != null)
+    {
+      fs.exists(exports.abiword, function(exists) {
+        if (!exists) {
+          var abiwordError = "Abiword does not exist at this path, check your settings file";
+          if(!exports.suppressErrorsInPadText){
+            exports.defaultPadText = exports.defaultPadText + "\nError: " + abiwordError + suppressDisableMsg;
+          }
+          console.error(abiwordError);
+          exports.abiword = null;
+        }
+      });
+    }
+  }
+
+  if (!exports.sessionKey) {
+    try {
+      exports.sessionKey = fs.readFileSync("./SESSIONKEY.txt","utf8");
+    } catch(e) {
+      exports.sessionKey = randomString(32);
+      fs.writeFileSync("./SESSIONKEY.txt",exports.sessionKey,"utf8");
+    }
+  } else {
+    console.warn("Declaring the sessionKey in the settings.json is deprecated. This value is auto-generated now. Please remove the setting from the file.");
+  }
+
+  if(exports.dbType === "dirty"){
+    var dirtyWarning = "DirtyDB is used. This is fine for testing but not recommended for production.";
+    if(!exports.suppressErrorsInPadText){
+      exports.defaultPadText = exports.defaultPadText + "\nWarning: " + dirtyWarning + suppressDisableMsg;
+    }
+    console.warn(dirtyWarning);
+  }
+};
+
+// initially load settings
+exports.reloadSettings();
+
+

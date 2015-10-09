@@ -20,13 +20,13 @@
 
 
 var ERR = require("async-stacktrace");
-var db = require("./DB").db;
 var async = require("async");
 var authorManager = require("./AuthorManager");
 var padManager = require("./PadManager");
 var sessionManager = require("./SessionManager");
-var settings = require("../utils/Settings")
-var randomString = require('ep_etherpad-lite/static/js/pad_utils').randomString;
+var settings = require("../utils/Settings");
+var log4js = require('log4js');
+var authLogger = log4js.getLogger("auth");
 
 /**
  * This function controlls the access to a pad, it checks if the user can access a pad.
@@ -36,15 +36,20 @@ var randomString = require('ep_etherpad-lite/static/js/pad_utils').randomString;
  * @param password the password the user has given to access this pad, can be null 
  * @param callback will be called with (err, {accessStatus: grant|deny|wrongPassword|needPassword, authorID: a.xxxxxx})
  */ 
-exports.checkAccess = function (padID, sessionID, token, password, callback)
+exports.checkAccess = function (padID, sessionCookie, token, password, callback)
 { 
   var statusObject;
+  
+  if(!padID) {
+    callback(null, {accessStatus: "deny"});
+    return;
+  }
 
   // a valid session is required (api-only mode)
   if(settings.requireSession)
   {
-    // no sessionID, access is denied
-    if(!sessionID)
+    // without sessionCookie, access is denied
+    if(!sessionCookie)
     {
       callback(null, {accessStatus: "deny"});
       return;
@@ -83,7 +88,7 @@ exports.checkAccess = function (padID, sessionID, token, password, callback)
           // grant access, with author of token
           callback(null, statusObject);
         }
-      })
+      });
       
       //don't continue
       return;
@@ -114,32 +119,55 @@ exports.checkAccess = function (padID, sessionID, token, password, callback)
             callback();
           });
         },
-        //get informations about this session
+        //get information about all sessions contained in this cookie
         function(callback)
         {
-          sessionManager.getSessionInfo(sessionID, function(err, sessionInfo)
+          if (!sessionCookie)
           {
-            //skip session validation if the session doesn't exists
-            if(err && err.message == "sessionID does not exist")
-            {
-              callback();
-              return;
-            }
-            
-            if(ERR(err, callback)) return;
-            
-            var now = Math.floor(new Date().getTime()/1000);
-            
-            //is it for this group? and is validUntil still ok? --> validSession
-            if(sessionInfo.groupID == groupID && sessionInfo.validUntil > now)
-            {
-              validSession = true;
-            }
-            
-            sessionAuthor = sessionInfo.authorID;
-            
             callback();
-          });
+            return;
+          }
+          
+          var sessionIDs = sessionCookie.split(',');
+          async.forEach(sessionIDs, function(sessionID, callback)
+          {
+            sessionManager.getSessionInfo(sessionID, function(err, sessionInfo)
+            {
+              //skip session if it doesn't exist
+              if(err && err.message == "sessionID does not exist")
+              {
+                authLogger.debug("Auth failed: unknown session");
+                callback();
+                return;
+              }
+              
+              if(ERR(err, callback)) return;
+              
+              var now = Math.floor(new Date().getTime()/1000);
+              
+              //is it for this group?
+              if(sessionInfo.groupID != groupID)
+              {
+                authLogger.debug("Auth failed: wrong group");
+                callback();
+                return;
+              }
+              
+              //is validUntil still ok?
+              if(sessionInfo.validUntil <= now)
+              {
+                authLogger.debug("Auth failed: validUntil");
+                callback();
+                return;
+              }
+              
+              // There is a valid session
+              validSession = true;
+              sessionAuthor = sessionInfo.authorID;
+              
+              callback();
+            });
+          }, callback);
         },
         //get author for token
         function(callback)
@@ -194,6 +222,12 @@ exports.checkAccess = function (padID, sessionID, token, password, callback)
           //--> grant access
           statusObject = {accessStatus: "grant", authorID: sessionAuthor};
         }
+        //- the setting to bypass password validation is set
+        else if(settings.sessionNoPassword)
+        {
+          //--> grant access
+          statusObject = {accessStatus: "grant", authorID: sessionAuthor};
+        }
         //- the pad is password protected and password is correct
         else if(isPasswordProtected && passwordStatus == "correct")
         {
@@ -223,7 +257,11 @@ exports.checkAccess = function (padID, sessionID, token, password, callback)
         //--> grant access
         statusObject = {accessStatus: "grant", authorID: sessionAuthor};
         //--> deny access if user isn't allowed to create the pad
-        if(settings.editOnly) statusObject.accessStatus = "deny";
+        if(settings.editOnly)
+        {
+          authLogger.debug("Auth failed: valid session & pad does not exist");
+          statusObject.accessStatus = "deny";
+        }
       }
       // there is no valid session avaiable AND pad exists
       else if(!validSession && padExists)
@@ -255,6 +293,7 @@ exports.checkAccess = function (padID, sessionID, token, password, callback)
         //- its not public
         else if(!isPublic)
         {
+          authLogger.debug("Auth failed: invalid session & pad is not public");
           //--> deny access
           statusObject = {accessStatus: "deny"};
         }
@@ -266,6 +305,7 @@ exports.checkAccess = function (padID, sessionID, token, password, callback)
       // there is no valid session avaiable AND pad doesn't exists
       else
       {
+         authLogger.debug("Auth failed: invalid session & pad does not exist");
          //--> deny access
          statusObject = {accessStatus: "deny"};
       }
@@ -277,4 +317,4 @@ exports.checkAccess = function (padID, sessionID, token, password, callback)
     if(ERR(err, callback)) return;
     callback(null, statusObject);
   });
-}
+};
